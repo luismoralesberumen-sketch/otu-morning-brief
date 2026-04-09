@@ -1,17 +1,36 @@
 """
 OTU Wheel Strategy — Morning Brief Bot
-Runs on Railway 24/7, fires briefs Mon-Fri at 9am, 11am, 2pm, 3:30pm ET
+Runs on Render 24/7, fires briefs Mon-Fri at 9am, 11am, 2pm, 3:30pm ET
 Sends formatted CSP opportunity table to Discord webhook.
 """
 
 import os
 import time
 import traceback
+import threading
 from datetime import datetime, date
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import pytz
 import yfinance as yf
 import requests
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OTU Morning Brief Bot is running.")
+    def log_message(self, format, *args):
+        pass  # suppress access logs
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Health server running on port {port}")
 
 # ── CONFIG (set via Railway environment variables) ───────────────────────────
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -249,18 +268,24 @@ def main():
     print(f"Tickers: {len(TICKERS)}")
     print(f"Webhook configured: {'YES' if DISCORD_WEBHOOK_URL else 'NO ⚠️'}")
 
-    scheduler = BlockingScheduler(timezone=ET)
+    # Start health check server (required for Render web service)
+    start_health_server()
+
+    scheduler = BackgroundScheduler(timezone=ET)
 
     scheduler.add_job(lambda: run_brief("9:00 AM"),  "cron", day_of_week="mon-fri", hour=9,  minute=0)
     scheduler.add_job(lambda: run_brief("11:00 AM"), "cron", day_of_week="mon-fri", hour=11, minute=0)
     scheduler.add_job(lambda: run_brief("2:00 PM"),  "cron", day_of_week="mon-fri", hour=14, minute=0)
     scheduler.add_job(lambda: run_brief("3:30 PM"),  "cron", day_of_week="mon-fri", hour=15, minute=30)
 
+    scheduler.start()
     print("\nScheduler running. Waiting for next trigger...\n")
 
     try:
-        scheduler.start()
+        while True:
+            time.sleep(60)
     except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
         print("Bot stopped.")
 
 
