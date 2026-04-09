@@ -32,6 +32,16 @@ def start_health_server():
     thread.start()
     print(f"Health server running on port {port}")
 
+
+def self_ping():
+    """Ping own URL every 10 minutes to prevent Render free tier spin-down."""
+    url = os.environ.get("RENDER_EXTERNAL_URL", "https://otu-morning-brief.onrender.com")
+    try:
+        requests.get(url, timeout=10)
+        print(f"Self-ping OK: {url}")
+    except Exception as e:
+        print(f"Self-ping failed: {e}")
+
 # ── CONFIG (set via Railway environment variables) ───────────────────────────
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 MIN_ROI = float(os.environ.get("MIN_ROI", "0.025"))          # 2.5%
@@ -277,6 +287,9 @@ def main():
     scheduler.add_job(lambda: run_brief("11:00 AM"), "cron", day_of_week="mon-fri", hour=11, minute=0)
     scheduler.add_job(lambda: run_brief("2:00 PM"),  "cron", day_of_week="mon-fri", hour=14, minute=0)
     scheduler.add_job(lambda: run_brief("3:30 PM"),  "cron", day_of_week="mon-fri", hour=15, minute=30)
+
+    # Keep-alive: ping own URL every 10 minutes to prevent Render spin-down
+    scheduler.add_job(self_ping, "interval", minutes=10)
 
     scheduler.start()
     print("\nScheduler running. Waiting for next trigger...\n")
