@@ -329,9 +329,9 @@ def main():
     start_health_server()
 
     scheduler = BackgroundScheduler(timezone=ET)
-    scheduler.add_job(lambda: run_brief("9:00 AM"),  "cron", day_of_week="mon-fri", hour=9,  minute=0)
-    scheduler.add_job(lambda: run_brief("11:00 AM"), "cron", day_of_week="mon-fri", hour=11, minute=0)
-    scheduler.add_job(lambda: run_brief("2:00 PM"),  "cron", day_of_week="mon-fri", hour=14, minute=0)
+    scheduler.add_job(lambda: run_brief("9:30 AM"),  "cron", day_of_week="mon-fri", hour=9,  minute=30)
+    scheduler.add_job(lambda: run_brief("11:30 AM"), "cron", day_of_week="mon-fri", hour=11, minute=30)
+    scheduler.add_job(lambda: run_brief("1:30 PM"),  "cron", day_of_week="mon-fri", hour=13, minute=30)
     scheduler.add_job(lambda: run_brief("3:30 PM"),  "cron", day_of_week="mon-fri", hour=15, minute=30)
     scheduler.add_job(self_ping, "interval", minutes=10)
     scheduler.start()
