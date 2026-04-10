@@ -10,7 +10,6 @@ import threading
 from datetime import datetime, date
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import pytz
-import yfinance as yf
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -51,10 +50,26 @@ def make_session():
     return session
 
 
-def yf_ticker(symbol):
-    """Create yfinance Ticker with browser session."""
-    session = make_session()
-    return yf.Ticker(symbol, session=session)
+def get_crumb(session):
+    """Get Yahoo Finance crumb token required for API calls."""
+    try:
+        # Step 1: visit Yahoo Finance to get session cookie
+        session.get("https://finance.yahoo.com", timeout=15)
+        time.sleep(1)
+        # Step 2: get crumb
+        r = session.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=10)
+        crumb = r.text.strip()
+        if crumb and len(crumb) > 3:
+            print(f"  Crumb obtained: {crumb[:8]}...")
+            return crumb
+        # Fallback: try alternative crumb endpoint
+        r2 = session.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=10)
+        crumb = r2.text.strip()
+        print(f"  Crumb (alt): {crumb[:8]}...")
+        return crumb
+    except Exception as e:
+        print(f"  Crumb error: {e}")
+        return None
 
 
 # ── Health server ────────────────────────────────────────────────────────────
@@ -87,13 +102,11 @@ def self_ping():
 
 # ── Data fetching ────────────────────────────────────────────────────────────
 
-def get_macro():
-    """Fetch VIX and SPY via Yahoo Finance JSON API directly."""
+def get_macro(session, crumb):
+    """Fetch VIX and SPY via Yahoo Finance JSON API with crumb auth."""
     try:
-        session = make_session()
-
         def fetch_price(symbol):
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d&crumb={crumb}"
             r = session.get(url, timeout=15)
             data = r.json()
             return data["chart"]["result"][0]["meta"]["regularMarketPrice"]
@@ -102,7 +115,7 @@ def get_macro():
         spy_price = fetch_price("SPY")
 
         # SPY EMA200
-        url200 = "https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=300d"
+        url200 = f"https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=300d&crumb={crumb}"
         r200 = session.get(url200, timeout=15)
         closes = r200.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
         closes = [c for c in closes if c is not None]
@@ -123,6 +136,7 @@ def get_macro():
         else:
             cash_pct, deploy_pct = 60, 40
 
+        print(f"  VIX={vix_price:.2f} SPY={spy_price:.2f} EMA200={ema200:.2f}")
         return {
             "vix": round(vix_price, 2),
             "spy": round(spy_price, 2),
@@ -136,66 +150,55 @@ def get_macro():
         return None
 
 
-def get_options_data(ticker_sym, expiry):
-    """Fetch CSP data via Yahoo Finance options API directly."""
+def get_options_data(session, crumb, ticker_sym):
+    """Fetch CSP data via Yahoo Finance options API with crumb auth."""
     try:
-        session = make_session()
-        time.sleep(0.5)  # rate limit buffer
+        time.sleep(0.4)  # rate limit buffer
 
         # Get price
-        url_quote = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}?interval=1d&range=1d"
+        url_quote = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}?interval=1d&range=1d&crumb={crumb}"
         r_quote = session.get(url_quote, timeout=15)
         price = r_quote.json()["chart"]["result"][0]["meta"]["regularMarketPrice"]
 
-        # Get options chain - find correct timestamp for expiry
-        url_opts = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_sym}"
+        # Get available expiry dates
+        url_opts = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_sym}?crumb={crumb}"
         r_opts = session.get(url_opts, timeout=15)
-        opts_data = r_opts.json()["optionChain"]["result"][0]
+        opts_json = r_opts.json()
 
-        # Find expiry timestamp matching target date
-        expiry_dates = opts_data.get("expirationDates", [])
-        target_dt = datetime.strptime(expiry, "%Y-%m-%d")
-        target_ts = None
-        best_diff = None
-
-        for ts in expiry_dates:
-            exp_dt = datetime.utcfromtimestamp(ts)
-            diff = abs((exp_dt - target_dt).days)
-            if best_diff is None or diff < best_diff:
-                best_diff = diff
-                target_ts = ts
-
-        if target_ts is None or best_diff > 10:
-            # Try to find any expiry in 30-45 DTE range
-            today = datetime.utcnow()
-            candidates = [(abs((datetime.utcfromtimestamp(ts) - today).days - 37), ts)
-                         for ts in expiry_dates
-                         if 25 <= (datetime.utcfromtimestamp(ts) - today).days <= 50]
-            if not candidates:
-                return None
-            candidates.sort()
-            target_ts = candidates[0][1]
-
-        # Fetch options for that expiry
-        url_chain = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_sym}?date={target_ts}"
-        r_chain = session.get(url_chain, timeout=15)
-        chain = r_chain.json()["optionChain"]["result"][0]
-        puts = chain.get("options", [{}])[0].get("puts", [])
-
-        if not puts:
+        if "optionChain" not in opts_json:
+            print(f"    No optionChain key for {ticker_sym}")
             return None
 
-        # Filter OTM puts with valid bid
+        result = opts_json["optionChain"].get("result", [])
+        if not result:
+            return None
+
+        expiry_dates = result[0].get("expirationDates", [])
+        today_dt = datetime.utcnow()
+
+        candidates = [
+            (abs((datetime.utcfromtimestamp(ts) - today_dt).days - 37), ts)
+            for ts in expiry_dates
+            if 20 <= (datetime.utcfromtimestamp(ts) - today_dt).days <= 55
+        ]
+        if not candidates:
+            return None
+        candidates.sort()
+        target_ts = candidates[0][1]
+
+        # Fetch options chain for that date
+        url_chain = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_sym}?date={target_ts}&crumb={crumb}"
+        r_chain = session.get(url_chain, timeout=15)
+        chain_data = r_chain.json()["optionChain"]["result"][0]
+        puts = chain_data.get("options", [{}])[0].get("puts", [])
+
         otm_puts = [p for p in puts if p.get("strike", 0) < price and p.get("bid", 0) > 0]
         if not otm_puts:
             return None
 
-        # Find ~25 delta strike
         ivs = [p.get("impliedVolatility", 0) for p in otm_puts if p.get("impliedVolatility", 0) > 0]
         avg_iv = sum(ivs) / len(ivs) if ivs else 0.5
-        otm_pct = 0.215 * avg_iv
-        target_strike = price * (1 - otm_pct)
-
+        target_strike = price * (1 - 0.215 * avg_iv)
         best = min(otm_puts, key=lambda p: abs(p.get("strike", 0) - target_strike))
 
         bid = best.get("bid", 0)
@@ -204,10 +207,12 @@ def get_options_data(ticker_sym, expiry):
         strike = best.get("strike", 0)
         iv = round(best.get("impliedVolatility", 0) * 100, 1)
         roi = round(mid / strike * 100, 2) if strike > 0 else 0
+        expiry_str = datetime.utcfromtimestamp(target_ts).strftime("%Y-%m-%d")
 
         return {
             "ticker": ticker_sym,
             "price": round(price, 2),
+            "expiry": expiry_str,
             "strike": strike,
             "bid": round(bid, 2),
             "ask": round(ask, 2),
@@ -244,10 +249,19 @@ def send_discord(content):
 def run_brief(slot_label):
     now_et = datetime.now(ET)
     print(f"\n{'='*60}")
-    print(f"Running brief: {slot_label} ET — {now_et.strftime('%Y-%m-%d %H:%M')}")
+    print(f"Running brief: {slot_label} ET -- {now_et.strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
 
-    macro = get_macro()
+    session = make_session()
+
+    print("Getting crumb...")
+    crumb = get_crumb(session)
+    if not crumb:
+        print("Failed to get crumb -- aborting")
+        send_discord(f"# OTU Brief -- {slot_label} ET\n\nERROR: Could not authenticate with Yahoo Finance (crumb failed). Brief skipped.")
+        return
+
+    macro = get_macro(session, crumb)
     print(f"Macro: {macro}")
 
     qualified = []
@@ -255,61 +269,61 @@ def run_brief(slot_label):
 
     for ticker in TICKERS:
         print(f"  Fetching {ticker}...", end=" ", flush=True)
-        result = get_options_data(ticker, TARGET_EXPIRY)
+        result = get_options_data(session, crumb, ticker)
         if result is None:
             print("no data")
             skipped.append(ticker)
             continue
         if result["roi"] >= MIN_ROI * 100:
-            print(f"✅ {result['roi']}%")
+            print(f"OK {result['roi']}%")
             qualified.append(result)
         else:
-            print(f"✗ {result['roi']}%")
+            print(f"skip {result['roi']}%")
             skipped.append(ticker)
 
     qualified.sort(key=lambda x: x["roi"], reverse=True)
 
     dte = compute_dte(TARGET_EXPIRY)
-    bear_flag = "🐻 BEAR MARKET" if (macro and macro["bear_market"]) else "✅ No Bear Market"
+    bear_flag = "BEAR MARKET" if (macro and macro["bear_market"]) else "No Bear Market"
 
-    lines = [f"# 📊 OTU Morning Brief — {now_et.strftime('%a %b %d, %Y')} | {slot_label} ET", ""]
+    lines = [f"# OTU Morning Brief -- {now_et.strftime('%a %b %d, %Y')} | {slot_label} ET", ""]
 
     if macro:
         lines.append(f"**VIX:** {macro['vix']} | **SPY:** ${macro['spy']} vs EMA200 ${macro['ema200']} | {bear_flag}")
-        lines.append(f"**OTU Rule:** VIX {macro['vix']} → Deploy **{macro['deploy_pct']}%** / Hold **{macro['cash_pct']}%** cash")
+        lines.append(f"**OTU Rule:** VIX {macro['vix']} -> Deploy **{macro['deploy_pct']}%** / Hold **{macro['cash_pct']}%** cash")
     else:
-        lines.append("⚠️ Macro data unavailable — check Render logs")
+        lines.append("Macro data unavailable -- check Render logs")
 
-    lines += ["", f"**CSP Scan | Exp {TARGET_EXPIRY} ({dte} DTE) | ≥2.5% ROI | ~25Δ**",
+    lines += ["", f"**CSP Scan | Exp {TARGET_EXPIRY} ({dte} DTE) | >=2.5% ROI | ~25D**",
               f"Found **{len(qualified)}/{len(TICKERS)}** qualifying trades", ""]
 
     if qualified:
         lines.append("```")
-        lines.append(f"{'#':<3} {'Ticker':<6} {'Price':>8} {'Strike':>7} {'Bid':>6} {'Ask':>6} {'Mid':>6} {'IV':>6} {'ROI':>6}")
-        lines.append("-" * 62)
+        lines.append(f"{'#':<3} {'Ticker':<6} {'Price':>8} {'Expiry':<12} {'Strike':>7} {'Bid':>6} {'Ask':>6} {'Mid':>6} {'IV':>6} {'ROI':>6}")
+        lines.append("-" * 74)
         for i, r in enumerate(qualified, 1):
-            lines.append(f"{i:<3} {r['ticker']:<6} ${r['price']:>7.2f} ${r['strike']:>6.0f} "
+            lines.append(f"{i:<3} {r['ticker']:<6} ${r['price']:>7.2f} {r.get('expiry', TARGET_EXPIRY):<12} ${r['strike']:>6.0f} "
                          f"${r['bid']:>5.2f} ${r['ask']:>5.2f} ${r['mid']:>5.2f} {r['iv']:>5.1f}% {r['roi']:>5.2f}%")
         lines.append("```")
 
-        lines += ["", "**🏆 Top 5 Picks**"]
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+        lines += ["", "**Top 5 Picks**"]
+        medals = ["1.", "2.", "3.", "4.", "5."]
         for i, r in enumerate(qualified[:5]):
             lines.append(f"{medals[i]} **{r['ticker']}** ${r['strike']:.0f}P @ ${r['mid']:.2f} mid | {r['roi']:.2f}% ROI | IV {r['iv']:.1f}%")
     else:
-        lines.append("⚠️ No qualifying trades found — Yahoo Finance may be rate-limiting. Check logs.")
+        lines.append("No qualifying trades found -- Yahoo Finance may be rate-limiting. Check logs.")
 
     lines += ["", f"*Data: Yahoo Finance | {now_et.strftime('%H:%M ET')}*"]
 
     send_discord("\n".join(lines))
-    print(f"\nBrief sent ✅")
+    print(f"\nBrief sent")
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
     print("OTU Morning Brief Bot starting...")
-    print(f"Webhook configured: {'YES' if DISCORD_WEBHOOK_URL else 'NO ⚠️'}")
+    print(f"Webhook configured: {'YES' if DISCORD_WEBHOOK_URL else 'NO'}")
     print(f"Target expiry: {TARGET_EXPIRY} | Min ROI: {MIN_ROI*100}%")
 
     start_health_server()
