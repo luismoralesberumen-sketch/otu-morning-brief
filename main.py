@@ -6,15 +6,58 @@ Sends formatted CSP opportunity table to Discord webhook.
 
 import os
 import time
-import traceback
 import threading
 from datetime import datetime, date
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import pytz
 import yfinance as yf
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from apscheduler.schedulers.background import BackgroundScheduler
 
+
+# ── CONFIG ───────────────────────────────────────────────────────────────────
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+MIN_ROI = float(os.environ.get("MIN_ROI", "0.025"))
+TARGET_EXPIRY = os.environ.get("TARGET_EXPIRY", "2026-05-15")
+ET = pytz.timezone("America/New_York")
+
+TICKERS = [
+    "AMD", "WDC", "AA", "FCX", "STX", "VRT", "DELL", "MU", "ADI", "AMAT",
+    "GLW", "LRCX", "NEM", "CAT", "CCJ", "CLS", "TSM", "AVGO", "GE", "RTX",
+    "CSCO", "LMT", "JPM", "EQT", "XOM", "T", "ALL", "GOOGL", "ANET", "NVDA"
+]
+
+# Browser-like headers to avoid Yahoo Finance blocking cloud IPs
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def make_session():
+    """Create a requests session with browser headers and retry logic."""
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    retry = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def yf_ticker(symbol):
+    """Create yfinance Ticker with browser session."""
+    session = make_session()
+    return yf.Ticker(symbol, session=session)
+
+
+# ── Health server ────────────────────────────────────────────────────────────
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -22,7 +65,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"OTU Morning Brief Bot is running.")
     def log_message(self, format, *args):
-        pass  # suppress access logs
+        pass
 
 
 def start_health_server():
@@ -34,42 +77,43 @@ def start_health_server():
 
 
 def self_ping():
-    """Ping own URL every 10 minutes to prevent Render free tier spin-down."""
     url = os.environ.get("RENDER_EXTERNAL_URL", "https://otu-morning-brief.onrender.com")
     try:
         requests.get(url, timeout=10)
-        print(f"Self-ping OK: {url}")
+        print(f"Self-ping OK")
     except Exception as e:
         print(f"Self-ping failed: {e}")
 
-# ── CONFIG (set via Railway environment variables) ───────────────────────────
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
-MIN_ROI = float(os.environ.get("MIN_ROI", "0.025"))          # 2.5%
-TARGET_EXPIRY = os.environ.get("TARGET_EXPIRY", "2026-05-15")  # update when needed
-ET = pytz.timezone("America/New_York")
 
-TICKERS = [
-    "AMD", "WDC", "AA", "FCX", "STX", "VRT", "DELL", "MU", "ADI", "AMAT",
-    "GLW", "LRCX", "NEM", "CAT", "CCJ", "CLS", "TSM", "AVGO", "GE", "RTX",
-    "CSCO", "LMT", "JPM", "EQT", "XOM", "T", "ALL", "GOOGL", "ANET", "NVDA"
-]
-# ─────────────────────────────────────────────────────────────────────────────
-
+# ── Data fetching ────────────────────────────────────────────────────────────
 
 def get_macro():
-    """Fetch VIX and SPY data."""
+    """Fetch VIX and SPY via Yahoo Finance JSON API directly."""
     try:
-        vix = yf.Ticker("^VIX")
-        vix_price = vix.fast_info["last_price"]
+        session = make_session()
 
-        spy = yf.Ticker("SPY")
-        spy_price = spy.fast_info["last_price"]
+        def fetch_price(symbol):
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+            r = session.get(url, timeout=15)
+            data = r.json()
+            return data["chart"]["result"][0]["meta"]["regularMarketPrice"]
 
-        # SPY EMA200 via 200-day history
-        hist = spy.history(period="300d")
-        ema200 = hist["Close"].ewm(span=200, adjust=False).mean().iloc[-1]
+        vix_price = fetch_price("%5EVIX")
+        spy_price = fetch_price("SPY")
 
-        # OTU cash rule
+        # SPY EMA200
+        url200 = "https://query1.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=300d"
+        r200 = session.get(url200, timeout=15)
+        closes = r200.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        closes = [c for c in closes if c is not None]
+
+        # Calculate EMA200
+        k = 2 / (200 + 1)
+        ema = closes[0]
+        for price in closes[1:]:
+            ema = price * k + ema * (1 - k)
+        ema200 = round(ema, 2)
+
         if vix_price < 20:
             cash_pct, deploy_pct = 0, 100
         elif vix_price < 25:
@@ -79,15 +123,13 @@ def get_macro():
         else:
             cash_pct, deploy_pct = 60, 40
 
-        bear = spy_price < ema200
-
         return {
             "vix": round(vix_price, 2),
             "spy": round(spy_price, 2),
-            "ema200": round(ema200, 2),
+            "ema200": ema200,
             "cash_pct": cash_pct,
             "deploy_pct": deploy_pct,
-            "bear_market": bear
+            "bear_market": spy_price < ema200
         }
     except Exception as e:
         print(f"Macro fetch error: {e}")
@@ -95,68 +137,83 @@ def get_macro():
 
 
 def get_options_data(ticker_sym, expiry):
-    """Fetch CSP data for a single ticker at the target expiry."""
+    """Fetch CSP data via Yahoo Finance options API directly."""
     try:
-        tk = yf.Ticker(ticker_sym)
-        price = tk.fast_info["last_price"]
+        session = make_session()
+        time.sleep(0.5)  # rate limit buffer
 
-        # Check expiry is available
-        available = tk.options
-        if expiry not in available:
-            # Find nearest available expiry 30-45 DTE
-            target = datetime.strptime(expiry, "%Y-%m-%d").date()
-            today = date.today()
-            candidates = []
-            for exp in available:
-                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                dte = (exp_date - today).days
-                if 25 <= dte <= 50:
-                    candidates.append((abs(dte - 37), exp))
-            if candidates:
-                candidates.sort()
-                expiry = candidates[0][1]
-            else:
+        # Get price
+        url_quote = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}?interval=1d&range=1d"
+        r_quote = session.get(url_quote, timeout=15)
+        price = r_quote.json()["chart"]["result"][0]["meta"]["regularMarketPrice"]
+
+        # Get options chain - find correct timestamp for expiry
+        url_opts = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_sym}"
+        r_opts = session.get(url_opts, timeout=15)
+        opts_data = r_opts.json()["optionChain"]["result"][0]
+
+        # Find expiry timestamp matching target date
+        expiry_dates = opts_data.get("expirationDates", [])
+        target_dt = datetime.strptime(expiry, "%Y-%m-%d")
+        target_ts = None
+        best_diff = None
+
+        for ts in expiry_dates:
+            exp_dt = datetime.utcfromtimestamp(ts)
+            diff = abs((exp_dt - target_dt).days)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                target_ts = ts
+
+        if target_ts is None or best_diff > 10:
+            # Try to find any expiry in 30-45 DTE range
+            today = datetime.utcnow()
+            candidates = [(abs((datetime.utcfromtimestamp(ts) - today).days - 37), ts)
+                         for ts in expiry_dates
+                         if 25 <= (datetime.utcfromtimestamp(ts) - today).days <= 50]
+            if not candidates:
                 return None
+            candidates.sort()
+            target_ts = candidates[0][1]
 
-        chain = tk.option_chain(expiry)
-        puts = chain.puts
+        # Fetch options for that expiry
+        url_chain = f"https://query2.finance.yahoo.com/v7/finance/options/{ticker_sym}?date={target_ts}"
+        r_chain = session.get(url_chain, timeout=15)
+        chain = r_chain.json()["optionChain"]["result"][0]
+        puts = chain.get("options", [{}])[0].get("puts", [])
 
-        if puts.empty:
+        if not puts:
             return None
 
-        # Filter OTM puts only (strike < price)
-        puts = puts[puts["strike"] < price].copy()
-        puts = puts[puts["bid"] > 0].copy()  # skip illiquid
-
-        if puts.empty:
+        # Filter OTM puts with valid bid
+        otm_puts = [p for p in puts if p.get("strike", 0) < price and p.get("bid", 0) > 0]
+        if not otm_puts:
             return None
-
-        # Calculate mid and ROI for each strike
-        puts["mid"] = (puts["bid"] + puts["ask"]) / 2
-        puts["roi"] = puts["mid"] / puts["strike"]
-        puts["iv_pct"] = puts["impliedVolatility"] * 100
 
         # Find ~25 delta strike
-        # OTM% ≈ 0.215 × IV (annualized)
-        avg_iv = puts["impliedVolatility"].median()
+        ivs = [p.get("impliedVolatility", 0) for p in otm_puts if p.get("impliedVolatility", 0) > 0]
+        avg_iv = sum(ivs) / len(ivs) if ivs else 0.5
         otm_pct = 0.215 * avg_iv
         target_strike = price * (1 - otm_pct)
 
-        # Find nearest strike to target
-        puts["strike_diff"] = abs(puts["strike"] - target_strike)
-        best = puts.loc[puts["strike_diff"].idxmin()]
+        best = min(otm_puts, key=lambda p: abs(p.get("strike", 0) - target_strike))
+
+        bid = best.get("bid", 0)
+        ask = best.get("ask", 0)
+        mid = round((bid + ask) / 2, 2)
+        strike = best.get("strike", 0)
+        iv = round(best.get("impliedVolatility", 0) * 100, 1)
+        roi = round(mid / strike * 100, 2) if strike > 0 else 0
 
         return {
             "ticker": ticker_sym,
             "price": round(price, 2),
-            "expiry": expiry,
-            "strike": best["strike"],
-            "bid": round(best["bid"], 2),
-            "ask": round(best["ask"], 2),
-            "mid": round(best["mid"], 2),
-            "iv": round(best["iv_pct"], 1),
-            "roi": round(best["roi"] * 100, 2),
-            "oi": int(best["openInterest"]) if not str(best["openInterest"]) == "nan" else 0
+            "strike": strike,
+            "bid": round(bid, 2),
+            "ask": round(ask, 2),
+            "mid": mid,
+            "iv": iv,
+            "roi": roi
         }
 
     except Exception as e:
@@ -165,135 +222,107 @@ def get_options_data(ticker_sym, expiry):
 
 
 def compute_dte(expiry):
-    exp_date = datetime.strptime(expiry, "%Y-%m-%d").date()
-    return (exp_date - date.today()).days
+    return (datetime.strptime(expiry, "%Y-%m-%d").date() - date.today()).days
 
+
+# ── Discord ──────────────────────────────────────────────────────────────────
 
 def send_discord(content):
-    """Send message to Discord webhook. Splits if >2000 chars."""
     if not DISCORD_WEBHOOK_URL:
         print("No webhook URL set.")
         return
-
-    # Discord has 2000 char limit per message
     chunks = [content[i:i+1990] for i in range(0, len(content), 1990)]
     for chunk in chunks:
-        resp = requests.post(
-            DISCORD_WEBHOOK_URL,
-            json={"content": chunk},
-            timeout=10
-        )
+        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": chunk}, timeout=10)
         if resp.status_code not in (200, 204):
             print(f"Discord error {resp.status_code}: {resp.text}")
         time.sleep(0.5)
 
 
+# ── Main brief ───────────────────────────────────────────────────────────────
+
 def run_brief(slot_label):
-    """Main workflow — fetch all data and send brief."""
     now_et = datetime.now(ET)
     print(f"\n{'='*60}")
     print(f"Running brief: {slot_label} ET — {now_et.strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
 
-    # ── Macro ────────────────────────────────────────────────────
     macro = get_macro()
+    print(f"Macro: {macro}")
 
-    # ── Options scan ────────────────────────────────────────────
     qualified = []
     skipped = []
 
     for ticker in TICKERS:
-        print(f"  Fetching {ticker}...", end=" ")
+        print(f"  Fetching {ticker}...", end=" ", flush=True)
         result = get_options_data(ticker, TARGET_EXPIRY)
         if result is None:
             print("no data")
-            skipped.append({"ticker": ticker, "reason": "no data"})
+            skipped.append(ticker)
             continue
-
         if result["roi"] >= MIN_ROI * 100:
-            print(f"✅ ROI {result['roi']}%")
+            print(f"✅ {result['roi']}%")
             qualified.append(result)
         else:
-            print(f"✗ ROI {result['roi']}%")
-            skipped.append({"ticker": ticker, "roi": result["roi"], "reason": "below threshold"})
+            print(f"✗ {result['roi']}%")
+            skipped.append(ticker)
 
-        time.sleep(0.3)  # be nice to Yahoo Finance
-
-    # Sort by ROI descending
     qualified.sort(key=lambda x: x["roi"], reverse=True)
 
-    # ── Format Discord message ───────────────────────────────────
     dte = compute_dte(TARGET_EXPIRY)
     bear_flag = "🐻 BEAR MARKET" if (macro and macro["bear_market"]) else "✅ No Bear Market"
 
-    lines = []
-    lines.append(f"# 📊 OTU Morning Brief — {now_et.strftime('%a %b %d, %Y')} | {slot_label} ET")
-    lines.append("")
+    lines = [f"# 📊 OTU Morning Brief — {now_et.strftime('%a %b %d, %Y')} | {slot_label} ET", ""]
 
     if macro:
         lines.append(f"**VIX:** {macro['vix']} | **SPY:** ${macro['spy']} vs EMA200 ${macro['ema200']} | {bear_flag}")
         lines.append(f"**OTU Rule:** VIX {macro['vix']} → Deploy **{macro['deploy_pct']}%** / Hold **{macro['cash_pct']}%** cash")
     else:
-        lines.append("⚠️ Macro data unavailable")
+        lines.append("⚠️ Macro data unavailable — check Render logs")
 
-    lines.append("")
-    lines.append(f"**CSP Scan | Exp {TARGET_EXPIRY} ({dte} DTE) | ≥2.5% ROI | ~25Δ**")
-    lines.append(f"Found **{len(qualified)}/{len(TICKERS)}** qualifying trades")
-    lines.append("")
+    lines += ["", f"**CSP Scan | Exp {TARGET_EXPIRY} ({dte} DTE) | ≥2.5% ROI | ~25Δ**",
+              f"Found **{len(qualified)}/{len(TICKERS)}** qualifying trades", ""]
 
     if qualified:
         lines.append("```")
         lines.append(f"{'#':<3} {'Ticker':<6} {'Price':>8} {'Strike':>7} {'Bid':>6} {'Ask':>6} {'Mid':>6} {'IV':>6} {'ROI':>6}")
         lines.append("-" * 62)
         for i, r in enumerate(qualified, 1):
-            lines.append(
-                f"{i:<3} {r['ticker']:<6} ${r['price']:>7.2f} "
-                f"${r['strike']:>6.0f} ${r['bid']:>5.2f} ${r['ask']:>5.2f} "
-                f"${r['mid']:>5.2f} {r['iv']:>5.1f}% {r['roi']:>5.2f}%"
-            )
+            lines.append(f"{i:<3} {r['ticker']:<6} ${r['price']:>7.2f} ${r['strike']:>6.0f} "
+                         f"${r['bid']:>5.2f} ${r['ask']:>5.2f} ${r['mid']:>5.2f} {r['iv']:>5.1f}% {r['roi']:>5.2f}%")
         lines.append("```")
-    else:
-        lines.append("⚠️ No qualifying trades found today.")
 
-    # Top 5
-    if qualified:
-        lines.append("")
-        lines.append("**🏆 Top 5 Picks**")
+        lines += ["", "**🏆 Top 5 Picks**"]
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
         for i, r in enumerate(qualified[:5]):
             lines.append(f"{medals[i]} **{r['ticker']}** ${r['strike']:.0f}P @ ${r['mid']:.2f} mid | {r['roi']:.2f}% ROI | IV {r['iv']:.1f}%")
+    else:
+        lines.append("⚠️ No qualifying trades found — Yahoo Finance may be rate-limiting. Check logs.")
 
-    lines.append("")
-    lines.append(f"*Data: Yahoo Finance live | {now_et.strftime('%H:%M ET')}*")
+    lines += ["", f"*Data: Yahoo Finance | {now_et.strftime('%H:%M ET')}*"]
 
-    message = "\n".join(lines)
-    send_discord(message)
-    print(f"\nBrief sent to Discord ✅")
+    send_discord("\n".join(lines))
+    print(f"\nBrief sent ✅")
 
+
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
     print("OTU Morning Brief Bot starting...")
-    print(f"Schedules (ET): 9:00am | 11:00am | 2:00pm | 3:30pm | Mon-Fri")
-    print(f"Target expiry: {TARGET_EXPIRY}")
-    print(f"Tickers: {len(TICKERS)}")
     print(f"Webhook configured: {'YES' if DISCORD_WEBHOOK_URL else 'NO ⚠️'}")
+    print(f"Target expiry: {TARGET_EXPIRY} | Min ROI: {MIN_ROI*100}%")
 
-    # Start health check server (required for Render web service)
     start_health_server()
 
     scheduler = BackgroundScheduler(timezone=ET)
-
     scheduler.add_job(lambda: run_brief("9:00 AM"),  "cron", day_of_week="mon-fri", hour=9,  minute=0)
     scheduler.add_job(lambda: run_brief("11:00 AM"), "cron", day_of_week="mon-fri", hour=11, minute=0)
     scheduler.add_job(lambda: run_brief("2:00 PM"),  "cron", day_of_week="mon-fri", hour=14, minute=0)
     scheduler.add_job(lambda: run_brief("3:30 PM"),  "cron", day_of_week="mon-fri", hour=15, minute=30)
-
-    # Keep-alive: ping own URL every 10 minutes to prevent Render spin-down
     scheduler.add_job(self_ping, "interval", minutes=10)
-
     scheduler.start()
-    print("\nScheduler running. Waiting for next trigger...\n")
 
+    print("\nScheduler running. Waiting for next trigger...\n")
     try:
         while True:
             time.sleep(60)
