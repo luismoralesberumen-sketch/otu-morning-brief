@@ -23,12 +23,17 @@ TARGET_EXPIRY = os.environ.get("TARGET_EXPIRY", "2026-05-15")
 ET = pytz.timezone("America/New_York")
 
 TICKERS = [
+    # Approved Wheel Stocks (FINAL OTU 04132026)
     "AMD", "VRT", "PLTR", "FUTU", "SHOP", "DELL", "CRDO", "ANET", "HOOD", "WDC",
     "CCJ", "UBER", "KTOS", "FTNT", "INOD", "CSCO", "IBIT", "META", "APP", "MSFT",
     "TSLA", "AXP", "AVGO", "GE", "JPM", "CLS", "TSM", "AAPL", "GOOGL", "STX",
     "AMZN", "MU", "NVDA", "ETHA", "SOFI", "NU", "CDE", "TIGR", "IREN", "AA",
     "ADI", "CCL", "HL", "AMAT", "LRCX", "APH", "EQT", "NEM", "CAT", "FCX",
-    "RTX", "GLW", "COHR"
+    "RTX", "GLW", "COHR",
+    # Safe Haven Stocks
+    "LMT", "MCD", "PGR", "ALL", "PG", "XOM", "T",
+    # Additional (hardcoded)
+    "AXTI", "LITE", "SNDK",
 ]
 
 # Browser-like headers to avoid Yahoo Finance blocking cloud IPs
