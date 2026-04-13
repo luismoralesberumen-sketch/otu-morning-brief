@@ -283,6 +283,21 @@ def run_brief(slot_label):
 
     qualified.sort(key=lambda x: x["roi"], reverse=True)
 
+    # Detect Yahoo Finance IP block: if ALL tickers returned no data, it's a block not a market issue
+    no_data_count = len([t for t in TICKERS if t not in [r["ticker"] for r in qualified] and t not in skipped])
+    total_no_data = len(TICKERS) - len(skipped) - len(qualified)
+    blocked = (len(qualified) == 0 and total_no_data >= len(TICKERS) * 0.7)
+
+    if blocked:
+        send_discord(
+            f"**OTU Brief -- {now_et.strftime('%a %b %d, %Y')} | {slot_label} ET**\n\n"
+            f"⚠️ **Yahoo Finance is blocking Render's server IP — no options data available.**\n\n"
+            f"Please run the brief manually from your computer:\n"
+            f"```\npython C:\\Users\\THINKPAD\\run_brief_now.py\n```"
+        )
+        print("Yahoo Finance IP block detected — alert sent to Discord.")
+        return
+
     dte = compute_dte(TARGET_EXPIRY)
     bear_flag = "BEAR MARKET" if (macro and macro["bear_market"]) else "No Bear Market"
 
@@ -311,7 +326,7 @@ def run_brief(slot_label):
         for i, r in enumerate(qualified[:5]):
             lines.append(f"{medals[i]} **{r['ticker']}** ${r['strike']:.0f}P @ ${r['mid']:.2f} mid | {r['roi']:.2f}% ROI | IV {r['iv']:.1f}%")
     else:
-        lines.append("No qualifying trades found -- Yahoo Finance may be rate-limiting. Check logs.")
+        lines.append("No qualifying trades met the >=2.5% ROI threshold today.")
 
     lines += ["", f"*Data: Yahoo Finance | {now_et.strftime('%H:%M ET')}*"]
 
