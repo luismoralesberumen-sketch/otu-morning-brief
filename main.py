@@ -23,9 +23,12 @@ TARGET_EXPIRY = os.environ.get("TARGET_EXPIRY", "2026-05-15")
 ET = pytz.timezone("America/New_York")
 
 TICKERS = [
-    "AMD", "WDC", "AA", "FCX", "STX", "VRT", "DELL", "MU", "ADI", "AMAT",
-    "GLW", "LRCX", "NEM", "CAT", "CCJ", "CLS", "TSM", "AVGO", "GE", "RTX",
-    "CSCO", "LMT", "JPM", "EQT", "XOM", "T", "ALL", "GOOGL", "ANET", "NVDA"
+    "AMD", "VRT", "PLTR", "FUTU", "SHOP", "DELL", "CRDO", "ANET", "HOOD", "WDC",
+    "CCJ", "UBER", "KTOS", "FTNT", "INOD", "CSCO", "IBIT", "META", "APP", "MSFT",
+    "TSLA", "AXP", "AVGO", "GE", "JPM", "CLS", "TSM", "AAPL", "GOOGL", "STX",
+    "AMZN", "MU", "NVDA", "ETHA", "SOFI", "NU", "CDE", "TIGR", "IREN", "AA",
+    "ADI", "CCL", "HL", "AMAT", "LRCX", "APH", "EQT", "NEM", "CAT", "FCX",
+    "RTX", "GLW", "COHR"
 ]
 
 # Browser-like headers to avoid Yahoo Finance blocking cloud IPs
