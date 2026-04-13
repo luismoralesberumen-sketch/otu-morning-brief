@@ -127,14 +127,16 @@ def get_macro(session, crumb):
             ema = price * k + ema * (1 - k)
         ema200 = round(ema, 2)
 
-        if vix_price < 20:
-            cash_pct, deploy_pct = 0, 100
-        elif vix_price < 25:
-            cash_pct, deploy_pct = 20, 80
+        if vix_price < 10:
+            cash_pct, deploy_pct = 87, 13    # 75-100% cash
+        elif vix_price < 15:
+            cash_pct, deploy_pct = 62, 38    # 50-75% cash
+        elif vix_price < 20:
+            cash_pct, deploy_pct = 37, 63    # 25-50% cash
         elif vix_price < 30:
-            cash_pct, deploy_pct = 40, 60
+            cash_pct, deploy_pct = 0, 100    # 0% cash, fully deployed
         else:
-            cash_pct, deploy_pct = 60, 40
+            cash_pct, deploy_pct = 0, 100    # 30+ = add new cash deposits
 
         print(f"  VIX={vix_price:.2f} SPY={spy_price:.2f} EMA200={ema200:.2f}")
         return {
@@ -304,8 +306,15 @@ def run_brief(slot_label):
     lines = [f"# OTU Morning Brief -- {now_et.strftime('%a %b %d, %Y')} | {slot_label} ET", ""]
 
     if macro:
+        vix_rule = (
+            "75-100% cash (VIX <10)" if macro['vix'] < 10 else
+            "50-75% cash (VIX 10-15)" if macro['vix'] < 15 else
+            "25-50% cash (VIX 15-20)" if macro['vix'] < 20 else
+            "0% cash — fully deployed (VIX 20-30)" if macro['vix'] < 30 else
+            "ADD NEW CASH DEPOSITS (VIX 30+)"
+        )
         lines.append(f"**VIX:** {macro['vix']} | **SPY:** ${macro['spy']} vs EMA200 ${macro['ema200']} | {bear_flag}")
-        lines.append(f"**OTU Rule:** VIX {macro['vix']} -> Deploy **{macro['deploy_pct']}%** / Hold **{macro['cash_pct']}%** cash")
+        lines.append(f"**OTU Rule:** {vix_rule}")
     else:
         lines.append("Macro data unavailable -- check Render logs")
 
