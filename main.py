@@ -33,7 +33,7 @@ TICKERS = [
     # Safe Haven Stocks
     "LMT", "MCD", "PGR", "ALL", "PG", "XOM", "T",
     # Additional (hardcoded)
-    "AXTI", "LITE", "SNDK", "DAL",
+    "DAL",
 ]
 
 # Browser-like headers to avoid Yahoo Finance blocking cloud IPs
