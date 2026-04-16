@@ -326,7 +326,8 @@ def run_brief(slot_label):
     else:
         lines.append("Macro data unavailable -- check Render logs")
 
-    lines += ["", f"**CSP Scan | Exp {TARGET_EXPIRY} ({dte} DTE) | >=2.5% ROI | ~25D**",
+    lines += ["", f"**CSP Scan | Exp {TARGET_EXPIRY} ({dte} DTE) | ~30D/30Delta | >=2.5% ROI**",
+              f"*Criteria: 18mo uptrend + Positive P/E + Earnings beats + Premium >=2%*",
               f"Found **{len(qualified)}/{len(TICKERS)}** qualifying trades", ""]
 
     if qualified:
