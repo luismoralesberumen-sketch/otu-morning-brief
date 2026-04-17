@@ -44,10 +44,15 @@ TICKERS = [
 # ── Schwab Token Management ───────────────────────────────────────────────────
 
 _current_access_token = None
+_token_refreshed_at   = None   # datetime of last successful refresh
 
 def refresh_schwab_token():
-    """Refresh Schwab access token using refresh token from env var."""
-    global _current_access_token
+    """
+    Refresh Schwab access token using refresh token from env var.
+    Always persists the new refresh token back to Render env vars so
+    deploy restarts never lose a rotated token.
+    """
+    global _current_access_token, _token_refreshed_at
     refresh_token = os.environ.get("SCHWAB_REFRESH_TOKEN", "")
     if not refresh_token:
         print("No SCHWAB_REFRESH_TOKEN set")
@@ -63,11 +68,13 @@ def refresh_schwab_token():
         data = r.json()
         if "access_token" in data:
             _current_access_token = data["access_token"]
-            # Update refresh token in Render env if a new one was issued
-            new_refresh = data.get("refresh_token")
-            if new_refresh and new_refresh != refresh_token:
+            _token_refreshed_at   = datetime.datetime.now(ET)
+            # Always persist rotated refresh token — prevents desync on restarts
+            new_refresh = data.get("refresh_token") or refresh_token
+            if new_refresh != refresh_token:
                 update_render_env("SCHWAB_REFRESH_TOKEN", new_refresh)
                 os.environ["SCHWAB_REFRESH_TOKEN"] = new_refresh
+                print("  Schwab refresh token rotated and saved to Render")
             print("  Schwab token refreshed OK")
             return _current_access_token
         else:
@@ -76,6 +83,31 @@ def refresh_schwab_token():
     except Exception as e:
         print(f"  Token refresh error: {e}")
         return _current_access_token
+
+
+def check_token_expiry_warning():
+    """
+    Send a Discord warning if the refresh token is approaching its 7-day expiry.
+    Schwab refresh tokens expire 7 days from the INITIAL auth (not from rotation).
+    We warn at 6 days (24h before expiry) so the user has time to re-auth.
+    """
+    if _token_refreshed_at is None:
+        return
+    age_days = (datetime.datetime.now(ET) - _token_refreshed_at).total_seconds() / 86400
+    if age_days >= 6:
+        reauth_url = (
+            "https://api.schwabapi.com/v1/oauth/authorize"
+            f"?response_type=code&client_id={SCHWAB_CLIENT_ID}"
+            "&redirect_uri=https%3A%2F%2F127.0.0.1"
+        )
+        msg = (
+            "**OTU Bot — Schwab Re-Auth requerida en < 24h**\n"
+            "El refresh token de Schwab expira cada 7 dias. Corre el siguiente script:\n"
+            "```\npython C:\\Users\\THINKPAD\\schwab_quick_auth.py\n```\n"
+            f"URL de autorizacion:\n{reauth_url}"
+        )
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=10)
+        print("  Token expiry warning sent to Discord")
 
 
 def update_render_env(key, value):
@@ -397,6 +429,8 @@ def main():
         scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=_hour, minute=33)
 
     scheduler.add_job(self_ping, "interval", minutes=10)
+    # Check daily at 8 AM ET if token is within 24h of expiry → Discord warning
+    scheduler.add_job(check_token_expiry_warning, "cron", day_of_week="mon-fri", hour=8, minute=0)
     scheduler.start()
 
     print("Scheduler running. Brief at :30 + Alerts at :33 ET, Mon-Fri.\n")
