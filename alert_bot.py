@@ -7,11 +7,16 @@ No duplicate alerts unless the tier improves.
 
 import math
 import time
+import datetime as _dt
+import os
 import requests
 from datetime import datetime
 import pytz
 
 ET = pytz.timezone("America/New_York")
+
+TARGET_EXPIRY  = os.environ.get("TARGET_EXPIRY", "2026-05-15")
+MIN_SPREAD_ROI = 3.0   # T2 Spread: minimum CSP ROI% to confirm premium quality
 
 
 # ── Market Hours Detection ────────────────────────────────────────────────────
@@ -367,8 +372,9 @@ def _format_message(ticker: str, score: int, tier: int, tier_desc: str,
         f"Backtest WR: {bt}%  (last 6mo, 10-day fwd, +3% target)\n"
         f"{'─' * 48}\n"
         f"Strategy:    {tier_desc}\n"
-        f"Entry signal: Price crossing lower BB + RSI <= 32 confirmed\n"
-        f"```\n"
+        + (f"Entry:       Price crossing lower BB + RSI <= 32\n" if tier == 1 else "")
+        + (f"Options ROI: {d.get('options_roi', '?')}% (>= 3% confirmed)\n" if tier == 2 else "")
+        + f"```\n"
         f"*{now_et.strftime('%I:%M %p ET')} — OTU Wheel Alert System*"
     )
     return msg
@@ -378,8 +384,8 @@ def _format_message(ticker: str, score: int, tier: int, tier_desc: str,
 
 def _leap_criteria_met(details: dict) -> bool:
     """
-    Hard entry filter required for ALL T1 / T2 LEAP alerts:
-      1. Price at or crossing the lower Bollinger Band  (bb_pct <= 2%)
+    T1 LEAP entry filter:
+      1. Price at or crossing the lower Bollinger Band (bb_pct <= 2%)
       2. RSI(14) <= 32  (oversold confirmation)
     Both conditions must be true simultaneously.
     """
@@ -388,6 +394,74 @@ def _leap_criteria_met(details: dict) -> bool:
     if rsi is None or bb_pct is None:
         return False
     return rsi <= 32 and bb_pct <= 2.0
+
+
+def _get_spread_roi(schwab_headers: dict, ticker: str) -> float | None:
+    """
+    T2 Spread entry filter — fetches the ~30D put closest to TARGET_EXPIRY
+    and returns the CSP ROI% (mid / strike * 100).
+    Used to confirm there is enough premium (>= 3%) before alerting.
+    Returns float or None if data unavailable.
+    """
+    try:
+        today      = _dt.date.today()
+        target     = _dt.date.fromisoformat(TARGET_EXPIRY)
+        target_dte = (target - today).days
+
+        url = (
+            "https://api.schwabapi.com/marketdata/v1/chains"
+            f"?symbol={ticker}&contractType=PUT&strikeCount=20"
+            "&includeUnderlyingQuote=true&strategy=SINGLE&range=OTM"
+        )
+        r = requests.get(url, headers=schwab_headers, timeout=15)
+        chain = r.json()
+
+        if chain.get("status") == "FAILED" or "putExpDateMap" not in chain:
+            return None
+
+        underlying = chain.get("underlyingPrice", 0)
+        put_map    = chain.get("putExpDateMap", {})
+        if not put_map or not underlying:
+            return None
+
+        # Expiry closest to TARGET_EXPIRY
+        best_exp, best_diff = None, 999
+        for exp_key in put_map:
+            exp_date = _dt.date.fromisoformat(exp_key.split(":")[0])
+            dte = (exp_date - today).days
+            if dte < 7:
+                continue
+            diff = abs(dte - target_dte)
+            if diff < best_diff:
+                best_diff = diff
+                best_exp  = exp_key
+
+        if not best_exp:
+            return None
+
+        # Contract closest to 30 delta
+        best_contract, best_dd = None, 999
+        for strike_str, contracts in put_map[best_exp].items():
+            c     = contracts[0]
+            delta = abs(c.get("delta", 0))
+            if not delta:
+                continue
+            diff = abs(delta - 0.30)
+            if diff < best_dd:
+                best_dd       = diff
+                best_contract = (float(strike_str), c)
+
+        if not best_contract:
+            return None
+
+        strike, contract = best_contract
+        mid = (contract.get("bid", 0) + contract.get("ask", 0)) / 2
+        roi = round(mid / strike * 100, 2) if strike else 0
+        return roi
+
+    except Exception as e:
+        print(f"    [ALERT] spread ROI error {ticker}: {e}")
+        return None
 
 
 # ── Main Runner ───────────────────────────────────────────────────────────────
@@ -429,13 +503,25 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
                 _alert_state.pop(ticker, None)
                 continue
 
-            # ── LEAP entry filter: price crossing lower BB + RSI <= 32 ──────
-            if not _leap_criteria_met(details):
-                rsi    = details.get("rsi", "?")
-                bb_pct = details.get("bb_pct", "?")
-                print(f"  [SCAN] {ticker:6s} T{tier} score={score} — LEAP filter: RSI={rsi} BB%={bb_pct} — skip")
-                _alert_state.pop(ticker, None)  # reset so it re-alerts when criteria are met
-                continue
+            # ── Tier-specific entry filters ───────────────────────────────
+            if tier == 1:
+                # T1 LEAP: price crossing lower BB + RSI <= 32
+                if not _leap_criteria_met(details):
+                    rsi    = details.get("rsi", "?")
+                    bb_pct = details.get("bb_pct", "?")
+                    print(f"  [SCAN] {ticker:6s} T1 score={score} — LEAP filter: RSI={rsi} BB%={bb_pct} — skip")
+                    _alert_state.pop(ticker, None)
+                    continue
+
+            elif tier == 2:
+                # T2 Spread: options premium must yield >= 3% ROI
+                time.sleep(0.3)
+                roi = _get_spread_roi(schwab_headers, ticker)
+                if roi is None or roi < MIN_SPREAD_ROI:
+                    print(f"  [SCAN] {ticker:6s} T2 score={score} — Spread ROI={roi}% < {MIN_SPREAD_ROI}% — skip")
+                    _alert_state.pop(ticker, None)
+                    continue
+                details["options_roi"] = roi  # pass to Discord message
 
             prev      = _alert_state.get(ticker)
             prev_tier = prev["tier"] if prev else None
