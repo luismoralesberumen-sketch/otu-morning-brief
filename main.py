@@ -1,5 +1,5 @@
 """
-OTU Wheel Strategy — Morning Brief Bot
+OTU Wheel Strategy — Morning Brief Bot + Trade Alert System
 Runs on Render 24/7, fires Mon-Fri at 9:30, 11:30, 1:30, 3:30 PM ET
 Data: Charles Schwab Trader API (options, prices, history)
       Yahoo Finance (VIX only)
@@ -12,6 +12,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from apscheduler.schedulers.background import BackgroundScheduler
+import alert_bot
 
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -380,14 +381,26 @@ def main():
     start_health_server()
 
     scheduler = BackgroundScheduler(timezone=ET)
+    # ── Morning Brief ─────────────────────────────────────────────────────────
     scheduler.add_job(lambda: run_brief("9:30 AM"),  "cron", day_of_week="mon-fri", hour=9,  minute=30)
     scheduler.add_job(lambda: run_brief("11:30 AM"), "cron", day_of_week="mon-fri", hour=11, minute=30)
     scheduler.add_job(lambda: run_brief("1:30 PM"),  "cron", day_of_week="mon-fri", hour=13, minute=30)
     scheduler.add_job(lambda: run_brief("3:30 PM"),  "cron", day_of_week="mon-fri", hour=15, minute=30)
+
+    # ── Trade Alerts (same slots, 3-min offset so brief posts first) ──────────
+    def _run_alerts():
+        hdrs = get_schwab_headers()
+        alert_bot.run_alerts(hdrs, DISCORD_WEBHOOK_URL)
+
+    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=9,  minute=33)
+    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=11, minute=33)
+    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=13, minute=33)
+    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=15, minute=33)
+
     scheduler.add_job(self_ping, "interval", minutes=10)
     scheduler.start()
 
-    print("Scheduler running. Next brief at 9:30 AM ET Mon-Fri.\n")
+    print("Scheduler running. Brief at :30 + Alerts at :33 ET, Mon-Fri.\n")
     try:
         while True:
             time.sleep(60)
