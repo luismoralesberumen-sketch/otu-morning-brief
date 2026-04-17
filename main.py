@@ -387,15 +387,14 @@ def main():
     scheduler.add_job(lambda: run_brief("1:30 PM"),  "cron", day_of_week="mon-fri", hour=13, minute=30)
     scheduler.add_job(lambda: run_brief("3:30 PM"),  "cron", day_of_week="mon-fri", hour=15, minute=30)
 
-    # ── Trade Alerts (same slots, 3-min offset so brief posts first) ──────────
+    # ── Trade Alerts — every hour 9:33 AM → 3:33 PM ET (Mon-Fri) ────────────
+    # Runs at :33 to let the 9:30/11:30/1:30/3:30 brief post first
     def _run_alerts():
         hdrs = get_schwab_headers()
         alert_bot.run_alerts(hdrs, DISCORD_WEBHOOK_URL)
 
-    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=9,  minute=33)
-    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=11, minute=33)
-    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=13, minute=33)
-    scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=15, minute=33)
+    for _hour in [9, 10, 11, 12, 13, 14, 15]:
+        scheduler.add_job(_run_alerts, "cron", day_of_week="mon-fri", hour=_hour, minute=33)
 
     scheduler.add_job(self_ping, "interval", minutes=10)
     scheduler.start()
