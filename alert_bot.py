@@ -287,9 +287,7 @@ def calc_conviction(candles: list) -> tuple:
 def get_tier(score: int) -> tuple:
     if score >= 76: return 1, "LEAP Deep ITM ~79D (2027+)"
     if score >= 60: return 2, "Bull Call Spread / LEAP"
-    if score >= 40: return 3, "CSP ~30D"
-    if score >= 20: return 4, "CSP ~25D"
-    return None, "No setup"
+    return None, "No setup"   # T3/T4 filtered out — only T1 and T2 alerts
 
 
 # ── Schwab Data ───────────────────────────────────────────────────────────────
