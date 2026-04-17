@@ -537,12 +537,15 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
             print(f"  [SCAN] Exception on {ticker}: {e}")
             errors += 1
 
-    # ── Phase 2: Sort by score descending (T1 first → T4 last) ───────────────
+    # ── Phase 2: Sort by score descending (T1 first → T2 last) ──────────────
     candidates.sort(key=lambda x: x[0], reverse=True)
 
-    print(f"\n[ALERTS] {len(candidates)} alerts to send (sorted by conviction score)")
+    t1_count = sum(1 for c in candidates if c[1] == 1)
+    t2_count = sum(1 for c in candidates if c[1] == 2)
 
-    # ── Phase 3: Send to Discord in order ─────────────────────────────────────
+    print(f"\n[ALERTS] {len(candidates)} alerts to send (T1={t1_count} T2={t2_count})")
+
+    # ── Phase 3: Send to Discord in order ────────────────────────────────────
     alerts_sent = 0
 
     for score, tier, ticker, tier_desc, details, prev_tier in candidates:
@@ -563,5 +566,26 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
         except Exception as e:
             print(f"  [SENT] Exception sending {ticker}: {e}")
             errors += 1
+
+    # ── Phase 4: Always send scan summary so user knows system is alive ───────
+    now_et = datetime.now(ET)
+    if alerts_sent > 0:
+        summary = (
+            f"*🔍 Alert scan complete — {alerts_sent} alert(s) sent "
+            f"| T1: {t1_count} | T2: {t2_count} "
+            f"| {len(ALERT_TICKERS)} tickers scanned "
+            f"| {now_et.strftime('%I:%M %p ET')}*"
+        )
+    else:
+        summary = (
+            f"*🔍 Alert scan — **no setups** | "
+            f"{len(ALERT_TICKERS)} tickers scanned, 0 meet entry criteria "
+            f"(T1: RSI≤32+BB≤2% | T2: ROI≥3%) "
+            f"| {now_et.strftime('%I:%M %p ET')}*"
+        )
+    try:
+        requests.post(webhook_url, json={"content": summary}, timeout=10)
+    except Exception as e:
+        print(f"  [SUMMARY] Failed to send: {e}")
 
     print(f"[ALERTS] Done — {alerts_sent} sent | {errors} errors")
