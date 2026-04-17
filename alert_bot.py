@@ -13,6 +13,42 @@ import pytz
 
 ET = pytz.timezone("America/New_York")
 
+
+# ── Market Hours Detection ────────────────────────────────────────────────────
+
+def _is_market_open() -> bool:
+    """True if NYSE regular session is active (9:30–16:00 ET, Mon–Fri)."""
+    now = datetime.now(ET)
+    if now.weekday() >= 5:           # Saturday=5, Sunday=6
+        return False
+    open_  = now.replace(hour=9,  minute=30, second=0, microsecond=0)
+    close_ = now.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return open_ <= now < close_
+
+
+def _get_live_price(schwab_headers: dict, ticker: str):
+    """
+    Real-time last price from Schwab Quotes API.
+    Returns float or None.
+    """
+    url = (
+        "https://api.schwabapi.com/marketdata/v1/quotes"
+        f"?symbols={ticker}&fields=quote"
+    )
+    try:
+        r = requests.get(url, headers=schwab_headers, timeout=10)
+        data = r.json()
+        quote = data.get(ticker, {}).get("quote", {})
+        price = (
+            quote.get("lastPrice")
+            or quote.get("regularMarketLastPrice")
+            or quote.get("mark")
+        )
+        return float(price) if price else None
+    except Exception as e:
+        print(f"    [ALERT] live price error {ticker}: {e}")
+        return None
+
 # ── Ticker Universe ───────────────────────────────────────────────────────────
 # 61 morning brief tickers + additional from "Lista de seguimiento" watchlist
 
@@ -239,6 +275,16 @@ def get_tier(score: int) -> tuple:
 # ── Schwab Data ───────────────────────────────────────────────────────────────
 
 def _get_history(schwab_headers: dict, ticker: str) -> list:
+    """
+    Returns 6 months of daily OHLCV candles from Schwab.
+
+    Data source logic:
+      - Market OPEN  → pricehistory gives completed bars through yesterday;
+                       live quote (Schwab Quotes API) is used as today's close
+                       so all indicators reflect the current price.
+      - Market CLOSED → pricehistory already contains the latest completed bar;
+                        used as-is.
+    """
     url = (
         "https://api.schwabapi.com/marketdata/v1/pricehistory"
         f"?symbol={ticker}&periodType=month&period=6"
@@ -246,8 +292,21 @@ def _get_history(schwab_headers: dict, ticker: str) -> list:
     )
     try:
         r = requests.get(url, headers=schwab_headers, timeout=15)
-        data = r.json()
-        return data.get("candles", [])
+        candles = r.json().get("candles", [])
+
+        if candles and _is_market_open():
+            # Market is live — fetch real-time price and use it as today's close
+            live_price = _get_live_price(schwab_headers, ticker)
+            if live_price:
+                # Replace last bar's close with live price so indicators are current
+                last = dict(candles[-1])
+                last["close"] = live_price
+                # Also update high/low if live price breaks them intraday
+                last["high"] = max(last.get("high", live_price), live_price)
+                last["low"]  = min(last.get("low",  live_price), live_price)
+                candles[-1] = last
+
+        return candles
     except Exception as e:
         print(f"    [ALERT] history error {ticker}: {e}")
         return []
