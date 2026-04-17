@@ -30,14 +30,13 @@ def _get_live_price(schwab_headers: dict, ticker: str):
     """
     Fetches the most current regular-session price from Schwab Quotes API.
 
-    Priority:
-      1. regularMarketLastPrice  — official last price of the regular session
-                                   (today's close if market already closed,
-                                    live price if market is open)
-      2. closePrice              — today's settled close (populated post-close)
-      3. mark                    — fallback mark price
+    Field priority (Schwab does NOT expose regularMarketLastPrice):
+      1. mark       — mid of bid/ask; best estimate of current fair value,
+                      stable during and after market hours
+      2. lastPrice  — actual last trade (fallback; can be after-hours)
 
-    Never uses lastPrice alone — that can include after-hours trades.
+    NEVER use closePrice — Schwab populates that with YESTERDAY's close,
+    not today's, making it useless for same-day indicator calculations.
     Returns float or None.
     """
     url = (
@@ -48,11 +47,7 @@ def _get_live_price(schwab_headers: dict, ticker: str):
         r = requests.get(url, headers=schwab_headers, timeout=10)
         data = r.json()
         quote = data.get(ticker, {}).get("quote", {})
-        price = (
-            quote.get("regularMarketLastPrice")
-            or quote.get("closePrice")
-            or quote.get("mark")
-        )
+        price = quote.get("mark") or quote.get("lastPrice")
         return float(price) if price else None
     except Exception as e:
         print(f"    [ALERT] live price error {ticker}: {e}")
@@ -81,6 +76,15 @@ _alert_state: dict = {}
 # ── Technical Indicators ──────────────────────────────────────────────────────
 
 def _calc_rsi(closes: list, period: int = 14):
+    """
+    Wilder's Smoothed RSI — identical to TradingView's standard RSI.
+
+    Uses Wilder Moving Average (RMA):
+      1. Seed with simple average of the first `period` gains/losses.
+      2. Each subsequent bar: AvgGain = (prevAvgGain*(period-1) + gain) / period
+    This smoothing uses ALL historical data, not just the last `period` bars,
+    which is why a simple rolling average gives different (wrong) results.
+    """
     if len(closes) < period + 1:
         return None
     gains, losses = [], []
@@ -88,8 +92,15 @@ def _calc_rsi(closes: list, period: int = 14):
         d = closes[i] - closes[i - 1]
         gains.append(max(d, 0.0))
         losses.append(max(-d, 0.0))
-    avg_g = sum(gains[-period:]) / period
-    avg_l = sum(losses[-period:]) / period
+    if len(gains) < period:
+        return None
+    # Seed: simple average of first `period` values
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+    # Wilder smoothing over all remaining bars
+    for i in range(period, len(gains)):
+        avg_g = (avg_g * (period - 1) + gains[i]) / period
+        avg_l = (avg_l * (period - 1) + losses[i]) / period
     if avg_l == 0:
         return 100.0
     rs = avg_g / avg_l
