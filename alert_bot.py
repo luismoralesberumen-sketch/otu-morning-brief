@@ -369,18 +369,18 @@ def _format_message(ticker: str, score: int, tier: int, tier_desc: str,
 def run_alerts(schwab_headers: dict, webhook_url: str):
     """
     Called at each scheduled slot (9:30, 11:30, 1:30, 3:30 ET).
-    Scans ALERT_TICKERS, computes conviction scores, sends Discord alerts for:
-      - New setups (score >= 20, first detection)
-      - Tier upgrades (tier number decreases, e.g., T3 -> T2)
-    Skips if same tier already alerted.
+
+    Phase 1 — Scan all tickers and score them (no Discord sends yet).
+    Phase 2 — Sort by conviction score descending (T1 first → T4 last).
+    Phase 3 — Send to Discord in that order, skipping same-tier duplicates.
     """
     now_et = datetime.now(ET)
     print(f"\n{'='*60}")
     print(f"[ALERTS] Scan start — {now_et.strftime('%H:%M ET')} | {len(ALERT_TICKERS)} tickers")
 
-    alerts_sent = 0
-    skipped     = 0
-    errors      = 0
+    # ── Phase 1: Scan all tickers ─────────────────────────────────────────────
+    candidates = []   # (score, tier, ticker, tier_desc, details, prev_tier)
+    errors     = 0
 
     for ticker in ALERT_TICKERS:
         try:
@@ -388,41 +388,56 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
             candles = _get_history(schwab_headers, ticker)
 
             if len(candles) < 35:
-                print(f"  [ALERT] {ticker}: only {len(candles)} bars — skip")
-                skipped += 1
+                print(f"  [SCAN] {ticker}: only {len(candles)} bars — skip")
                 continue
 
             score, details = calc_conviction(candles)
             tier, tier_desc = get_tier(score)
 
             if tier is None:
-                # Score < 20 — clear any stale state so if it recovers we re-alert
-                if ticker in _alert_state:
-                    del _alert_state[ticker]
+                # Score < 20 — clear stale state so recovery triggers fresh alert
+                _alert_state.pop(ticker, None)
                 continue
 
-            prev       = _alert_state.get(ticker)
-            prev_tier  = prev["tier"] if prev else None
-            should_send = (prev is None) or (tier < prev["tier"])
+            prev      = _alert_state.get(ticker)
+            prev_tier = prev["tier"] if prev else None
 
-            if should_send:
-                msg  = _format_message(ticker, score, tier, tier_desc, details, prev_tier)
-                resp = requests.post(webhook_url, json={"content": msg}, timeout=10)
-                if resp.status_code in (200, 204):
-                    _alert_state[ticker] = {"tier": tier, "score": score}
-                    label = (f"T{prev_tier}->T{tier} UPGRADE" if prev_tier else f"NEW T{tier}")
-                    print(f"  [ALERT] SENT {ticker:6s} {label} score={score}")
-                    alerts_sent += 1
-                    time.sleep(0.5)  # Discord rate limit
-                else:
-                    print(f"  [ALERT] Discord error {resp.status_code} for {ticker}")
-                    errors += 1
+            # Only queue if: first detection OR tier improved
+            if (prev is None) or (tier < prev["tier"]):
+                candidates.append((score, tier, ticker, tier_desc, details, prev_tier))
+                print(f"  [SCAN] {ticker:6s} T{tier} score={score} — queued")
             else:
-                print(f"  [ALERT] {ticker:6s} T{tier} score={score} — same tier, no resend")
-                skipped += 1
+                print(f"  [SCAN] {ticker:6s} T{tier} score={score} — same tier, skip")
 
         except Exception as e:
-            print(f"  [ALERT] Exception on {ticker}: {e}")
+            print(f"  [SCAN] Exception on {ticker}: {e}")
             errors += 1
 
-    print(f"[ALERTS] Done — {alerts_sent} sent | {skipped} skipped | {errors} errors")
+    # ── Phase 2: Sort by score descending (T1 first → T4 last) ───────────────
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    print(f"\n[ALERTS] {len(candidates)} alerts to send (sorted by conviction score)")
+
+    # ── Phase 3: Send to Discord in order ─────────────────────────────────────
+    alerts_sent = 0
+
+    for score, tier, ticker, tier_desc, details, prev_tier in candidates:
+        try:
+            msg  = _format_message(ticker, score, tier, tier_desc, details, prev_tier)
+            resp = requests.post(webhook_url, json={"content": msg}, timeout=10)
+
+            if resp.status_code in (200, 204):
+                _alert_state[ticker] = {"tier": tier, "score": score}
+                label = f"T{prev_tier}->T{tier} UPGRADE" if prev_tier else f"NEW T{tier}"
+                print(f"  [SENT] {ticker:6s} {label} score={score}")
+                alerts_sent += 1
+                time.sleep(0.5)  # Discord rate limit
+            else:
+                print(f"  [SENT] Discord error {resp.status_code} for {ticker}")
+                errors += 1
+
+        except Exception as e:
+            print(f"  [SENT] Exception sending {ticker}: {e}")
+            errors += 1
+
+    print(f"[ALERTS] Done — {alerts_sent} sent | {errors} errors")
