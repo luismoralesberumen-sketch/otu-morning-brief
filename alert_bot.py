@@ -367,10 +367,27 @@ def _format_message(ticker: str, score: int, tier: int, tier_desc: str,
         f"Backtest WR: {bt}%  (last 6mo, 10-day fwd, +3% target)\n"
         f"{'─' * 48}\n"
         f"Strategy:    {tier_desc}\n"
+        f"Entry signal: Price crossing lower BB + RSI <= 32 confirmed\n"
         f"```\n"
         f"*{now_et.strftime('%I:%M %p ET')} — OTU Wheel Alert System*"
     )
     return msg
+
+
+# ── LEAP Entry Filter ────────────────────────────────────────────────────────
+
+def _leap_criteria_met(details: dict) -> bool:
+    """
+    Hard entry filter required for ALL T1 / T2 LEAP alerts:
+      1. Price at or crossing the lower Bollinger Band  (bb_pct <= 2%)
+      2. RSI(14) <= 32  (oversold confirmation)
+    Both conditions must be true simultaneously.
+    """
+    rsi    = details.get("rsi")
+    bb_pct = details.get("bb_pct")
+    if rsi is None or bb_pct is None:
+        return False
+    return rsi <= 32 and bb_pct <= 2.0
 
 
 # ── Main Runner ───────────────────────────────────────────────────────────────
@@ -380,8 +397,12 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
     Called at each scheduled slot (9:30, 11:30, 1:30, 3:30 ET).
 
     Phase 1 — Scan all tickers and score them (no Discord sends yet).
-    Phase 2 — Sort by conviction score descending (T1 first → T4 last).
+    Phase 2 — Sort by conviction score descending (T1 first → T2 last).
     Phase 3 — Send to Discord in that order, skipping same-tier duplicates.
+
+    LEAP entry filter (applied in Phase 1):
+      Alerts only fire when price is crossing the lower BB AND RSI <= 32.
+      This ensures we only alert on actual oversold-at-support setups.
     """
     now_et = datetime.now(ET)
     print(f"\n{'='*60}")
@@ -404,8 +425,16 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
             tier, tier_desc = get_tier(score)
 
             if tier is None:
-                # Score < 20 — clear stale state so recovery triggers fresh alert
+                # Score < T1/T2 threshold — clear stale state
                 _alert_state.pop(ticker, None)
+                continue
+
+            # ── LEAP entry filter: price crossing lower BB + RSI <= 32 ──────
+            if not _leap_criteria_met(details):
+                rsi    = details.get("rsi", "?")
+                bb_pct = details.get("bb_pct", "?")
+                print(f"  [SCAN] {ticker:6s} T{tier} score={score} — LEAP filter: RSI={rsi} BB%={bb_pct} — skip")
+                _alert_state.pop(ticker, None)  # reset so it re-alerts when criteria are met
                 continue
 
             prev      = _alert_state.get(ticker)
@@ -414,7 +443,7 @@ def run_alerts(schwab_headers: dict, webhook_url: str):
             # Only queue if: first detection OR tier improved
             if (prev is None) or (tier < prev["tier"]):
                 candidates.append((score, tier, ticker, tier_desc, details, prev_tier))
-                print(f"  [SCAN] {ticker:6s} T{tier} score={score} — queued")
+                print(f"  [SCAN] {ticker:6s} T{tier} score={score} RSI={details.get('rsi')} BB%={details.get('bb_pct')} — queued")
             else:
                 print(f"  [SCAN] {ticker:6s} T{tier} score={score} — same tier, skip")
 
