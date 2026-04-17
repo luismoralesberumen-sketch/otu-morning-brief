@@ -28,7 +28,16 @@ def _is_market_open() -> bool:
 
 def _get_live_price(schwab_headers: dict, ticker: str):
     """
-    Real-time last price from Schwab Quotes API.
+    Fetches the most current regular-session price from Schwab Quotes API.
+
+    Priority:
+      1. regularMarketLastPrice  — official last price of the regular session
+                                   (today's close if market already closed,
+                                    live price if market is open)
+      2. closePrice              — today's settled close (populated post-close)
+      3. mark                    — fallback mark price
+
+    Never uses lastPrice alone — that can include after-hours trades.
     Returns float or None.
     """
     url = (
@@ -40,8 +49,8 @@ def _get_live_price(schwab_headers: dict, ticker: str):
         data = r.json()
         quote = data.get(ticker, {}).get("quote", {})
         price = (
-            quote.get("lastPrice")
-            or quote.get("regularMarketLastPrice")
+            quote.get("regularMarketLastPrice")
+            or quote.get("closePrice")
             or quote.get("mark")
         )
         return float(price) if price else None
@@ -278,12 +287,10 @@ def _get_history(schwab_headers: dict, ticker: str) -> list:
     """
     Returns 6 months of daily OHLCV candles from Schwab.
 
-    Data source logic:
-      - Market OPEN  → pricehistory gives completed bars through yesterday;
-                       live quote (Schwab Quotes API) is used as today's close
-                       so all indicators reflect the current price.
-      - Market CLOSED → pricehistory already contains the latest completed bar;
-                        used as-is.
+    Data source logic — always uses Schwab Quotes API for the last bar close:
+      - Market OPEN   → regularMarketLastPrice = live real-time price
+      - Market CLOSED → regularMarketLastPrice = today's official session close
+      (pricehistory alone lags 1 day — Schwab updates daily bars with a delay)
     """
     url = (
         "https://api.schwabapi.com/marketdata/v1/pricehistory"
@@ -294,17 +301,16 @@ def _get_history(schwab_headers: dict, ticker: str) -> list:
         r = requests.get(url, headers=schwab_headers, timeout=15)
         candles = r.json().get("candles", [])
 
-        if candles and _is_market_open():
-            # Market is live — fetch real-time price and use it as today's close
-            live_price = _get_live_price(schwab_headers, ticker)
-            if live_price:
-                # Replace last bar's close with live price so indicators are current
+        if candles:
+            # Always fetch the most current regular-session price from Quotes API.
+            # This fixes the 1-day lag in pricehistory regardless of market status.
+            current_price = _get_live_price(schwab_headers, ticker)
+            if current_price:
                 last = dict(candles[-1])
-                last["close"] = live_price
-                # Also update high/low if live price breaks them intraday
-                last["high"] = max(last.get("high", live_price), live_price)
-                last["low"]  = min(last.get("low",  live_price), live_price)
-                candles[-1] = last
+                last["close"] = current_price
+                last["high"]  = max(last.get("high", current_price), current_price)
+                last["low"]   = min(last.get("low",  current_price), current_price)
+                candles[-1]   = last
 
         return candles
     except Exception as e:
