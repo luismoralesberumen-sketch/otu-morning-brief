@@ -110,7 +110,14 @@ def scan_open_positions(schwab_headers: dict) -> list[ManageAlert]:
     short_options: list[dict] = []          # OSI-parsed + qty/avg
 
     for acct in accounts:
-        acct_hash = acct.get("hashValue") or acct.get("accountNumber")
+        # Schwab may return list of dicts {accountNumber, hashValue}
+        # or a plain list of strings — handle both.
+        if isinstance(acct, str):
+            acct_hash = acct
+        elif isinstance(acct, dict):
+            acct_hash = acct.get("hashValue") or acct.get("accountNumber")
+        else:
+            continue
         if not acct_hash:
             continue
         for p in schwab_client.get_positions(schwab_headers, acct_hash):

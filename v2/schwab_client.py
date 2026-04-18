@@ -159,9 +159,24 @@ def get_put_chain_near_delta(headers: dict, ticker: str,
 # ── Account positions (for MANAGE module) ────────────────────────────────────
 
 def get_accounts(headers: dict) -> list[dict]:
+    """
+    Returns a list of account dicts {accountNumber, hashValue}.
+    Empty list if not authorized (401) or endpoint unavailable — so
+    MANAGE gracefully degrades for users on market-data-only scope.
+    """
     try:
         r = requests.get(f"{_ACCOUNTS}/accountNumbers", headers=headers, timeout=15)
-        return r.json() or []
+        if r.status_code != 200:
+            if r.status_code == 401:
+                print("  [SCHWAB] accounts: 401 — trader scope not authorized")
+            else:
+                print(f"  [SCHWAB] accounts: HTTP {r.status_code}")
+            return []
+        data = r.json()
+        if isinstance(data, list):
+            return data
+        # Unexpected shape → bail cleanly
+        return []
     except Exception as e:
         print(f"  [SCHWAB] accounts error: {e}")
         return []
