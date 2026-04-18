@@ -1,6 +1,6 @@
 {
   "covered_calls": [
-    {"ticker": "SOFI", "shares": 0, "cost_basis": 0.0, "target_delta": 0.25, "note": "monitoring for entry"},
-    {"ticker": "KTOS", "shares": 0, "cost_basis": 0.0, "target_delta": 0.25, "note": "monitoring for entry"}
+    {"ticker": "SOFI", "shares": 600, "cost_basis": 21.85, "target_delta": 0.25, "note": "4 lots: 200@20.24, 200@20.44, 100@23.91, 100@25.83 — avg 21.85"},
+    {"ticker": "KTOS", "shares": 100, "cost_basis": 75.00, "target_delta": 0.25, "note": "single lot"}
   ]
 }

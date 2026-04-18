@@ -98,6 +98,11 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
     # Assignment distance: how far OTM the call is (% above current price)
     otm_pct = (opt["strike"] - price) / price * 100.0 if price else 0.0
 
+    # Cost-basis guard: strike < cost means assignment locks in a loss
+    cb = float(entry.get("cost_basis", 0) or 0)
+    below_cost = bool(cb and opt["strike"] < cb)
+    cb_buffer_pct = ((opt["strike"] - cb) / cb * 100.0) if cb else None
+
     return {
         "ticker":       ticker,
         "shares":       int(entry.get("shares", 0) or 0),
@@ -116,6 +121,8 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
         "expiry":       opt["expiry"],
         "open_interest": opt["open_interest"],
         "otm_pct":      round(otm_pct, 2),
+        "below_cost":   below_cost,
+        "cb_buffer_pct": round(cb_buffer_pct, 2) if cb_buffer_pct is not None else None,
         "score":        score,
         "tier":         tier,
         "tier_desc":    tier_desc,

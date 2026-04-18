@@ -223,8 +223,16 @@ def cc_watchlist_message(results: list[dict], vix: Optional[float],
     if actionable:
         lines.append("**Actionable picks**")
         for r in actionable[:5]:
-            shares_note = (f"{r['shares']} sh held" if r.get("shares", 0) >= 100
-                           else "no shares yet — sell-to-open blocked")
+            shares = r.get("shares", 0)
+            if shares < 100:
+                shares_note = "⚠️ no shares yet — sell-to-open blocked"
+            elif r.get("below_cost"):
+                shares_note = (f"🚫 STRIKE BELOW COST (${r['strike']:.2f} < avg cost, "
+                                f"{r.get('cb_buffer_pct',0):+.1f}%) — assignment locks loss")
+            else:
+                buf = r.get("cb_buffer_pct")
+                buf_txt = f" | +{buf:.1f}% above cost" if buf is not None else ""
+                shares_note = f"✅ {shares} sh held{buf_txt}"
             lines.append(
                 f"• **{r['ticker']}** ${r['strike']:.0f}C @ ${r['mid']:.2f} "
                 f"| {r['otm_pct']:.1f}% OTM | ROI {r['roi']:.2f}% "
@@ -232,6 +240,17 @@ def cc_watchlist_message(results: list[dict], vix: Optional[float],
             )
     else:
         lines.append("*No actionable CC — all tickers failed filters or Kelly ≤ 0.*")
+
+    # Also surface tickers where strike is below cost, even if not in top 5
+    risky = [r for r in results if r.get("below_cost") and r.get("shares", 0) >= 100]
+    if risky and not any(r.get("below_cost") for r in actionable[:5]):
+        lines.append("")
+        lines.append("**⚠️ Cost-basis warnings (held shares, strike below cost)**")
+        for r in risky:
+            lines.append(
+                f"• {r['ticker']}: strike ${r['strike']:.2f} vs avg cost "
+                f"(buffer {r.get('cb_buffer_pct',0):+.1f}%) — consider higher delta target"
+            )
 
     return "\n".join(lines)
 
