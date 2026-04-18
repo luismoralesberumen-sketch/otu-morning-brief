@@ -127,8 +127,35 @@ def check_token_expiry_warning() -> None:
 
 # ── Health server (Render requires an HTTP listener) ─────────────────────────
 
+TRIGGER_TOKEN = os.environ.get("TRIGGER_TOKEN", "")
+
+
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self):
+        from urllib.parse import urlparse, parse_qs
+        u = urlparse(self.path)
+        qs = parse_qs(u.query)
+        if u.path == "/run":
+            tok = (qs.get("token") or [""])[0]
+            job = (qs.get("job")   or [""])[0]
+            if not TRIGGER_TOKEN or tok != TRIGGER_TOKEN:
+                self.send_response(401); self.end_headers()
+                self.wfile.write(b"unauthorized"); return
+            try:
+                if job == "entry-csp":
+                    threading.Thread(target=lambda: job_entry_csp("manual"), daemon=True).start()
+                elif job == "entry-leap":
+                    threading.Thread(target=job_entry_leap, daemon=True).start()
+                elif job == "manage":
+                    threading.Thread(target=job_manage, daemon=True).start()
+                else:
+                    self.send_response(400); self.end_headers()
+                    self.wfile.write(b"unknown job"); return
+                self.send_response(202); self.end_headers()
+                self.wfile.write(f"{job} dispatched".encode()); return
+            except Exception as e:
+                self.send_response(500); self.end_headers()
+                self.wfile.write(str(e).encode()); return
         self.send_response(200); self.end_headers()
         self.wfile.write(b"OTU Wheel v2.0 running.")
     def log_message(self, *_a, **_k): pass
