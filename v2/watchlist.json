@@ -1,0 +1,6 @@
+{
+  "covered_calls": [
+    {"ticker": "SOFI", "shares": 0, "cost_basis": 0.0, "target_delta": 0.25, "note": "monitoring for entry"},
+    {"ticker": "KTOS", "shares": 0, "cost_basis": 0.0, "target_delta": 0.25, "note": "monitoring for entry"}
+  ]
+}

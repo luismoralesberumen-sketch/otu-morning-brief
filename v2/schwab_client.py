@@ -156,6 +156,87 @@ def get_put_chain_near_delta(headers: dict, ticker: str,
         return None
 
 
+# ── Call chain near delta (for covered-call watchlist) ──────────────────────
+
+def get_call_chain_near_delta(headers: dict, ticker: str,
+                               target_expiry: str,
+                               target_delta: float = 0.25) -> Optional[dict]:
+    """Mirror of get_put_chain_near_delta but for OTM calls."""
+    try:
+        r = requests.get(
+            _CHAINS,
+            params={
+                "symbol": ticker,
+                "contractType": "CALL",
+                "strikeCount": 30,
+                "includeUnderlyingQuote": "true",
+                "strategy": "SINGLE",
+                "range": "OTM",
+            },
+            headers=headers,
+            timeout=15,
+        )
+        chain = r.json()
+        if chain.get("status") == "FAILED" or "callExpDateMap" not in chain:
+            return None
+        underlying = chain.get("underlyingPrice", 0)
+        if not underlying:
+            return None
+
+        today = _dt.date.today()
+        try:
+            target_date = _dt.date.fromisoformat(target_expiry)
+        except Exception:
+            target_date = today + _dt.timedelta(days=30)
+        target_dte = max(7, (target_date - today).days)
+
+        best_exp, best_diff = None, 999
+        for exp_key in chain["callExpDateMap"]:
+            exp_date = _dt.date.fromisoformat(exp_key.split(":")[0])
+            dte = (exp_date - today).days
+            if dte < 7:
+                continue
+            diff = abs(dte - target_dte)
+            if diff < best_diff:
+                best_diff = diff
+                best_exp = exp_key
+        if best_exp is None:
+            return None
+
+        best_contract, best_dd = None, 999
+        for strike_str, contracts in chain["callExpDateMap"][best_exp].items():
+            c = contracts[0]
+            d = abs(c.get("delta", 0))
+            if not d:
+                continue
+            diff = abs(d - target_delta)
+            if diff < best_dd:
+                best_dd = diff
+                best_contract = (float(strike_str), c)
+        if best_contract is None:
+            return None
+
+        strike, c = best_contract
+        bid = float(c.get("bid", 0) or 0)
+        ask = float(c.get("ask", 0) or 0)
+        mid = round((bid + ask) / 2, 2)
+        return {
+            "underlying":    round(underlying, 2),
+            "expiry":        best_exp.split(":")[0],
+            "strike":        strike,
+            "bid":           bid,
+            "ask":           ask,
+            "mid":           mid,
+            "iv":            float(c.get("volatility", 0) or 0),
+            "delta":         round(abs(c.get("delta", 0) or 0), 2),
+            "roi":           round(mid / strike * 100, 2) if strike else 0.0,
+            "open_interest": int(c.get("openInterest", 0) or 0),
+        }
+    except Exception as e:
+        print(f"  [SCHWAB] call chain error {ticker}: {e}")
+        return None
+
+
 # ── Account positions (for MANAGE module) ────────────────────────────────────
 
 def get_accounts(headers: dict) -> list[dict]:

@@ -84,17 +84,17 @@ def morning_brief_message(
 
     if qualified:
         lines.append("```")
-        hdr = f"{'#':<2} {'Tkr':<5} {'Px':>7} {'Str':>6} {'Δ':>5} {'Mid':>5} {'IVR':>4} {'ROI':>5} {'Kelly':>6} {'DTE':>3} Flags"
+        hdr = f"{'#':<2} {'Tkr':<5} {'Px':>7} {'Str':>6} {'Δ':>4} {'Mid':>5} {'IVR':>4} {'ROI':>5} {'Kly':>5} {'Scr':>4} {'DTE':>3} Flg"
         lines.append(hdr)
-        lines.append("-" * min(len(hdr), 72))
+        lines.append("-" * min(len(hdr), 78))
         for i, r in enumerate(qualified[:15], 1):
             flags = ",".join(r.get("flags", [])) or "-"
             lines.append(
                 f"{i:<2} {r['ticker']:<5} ${r['price']:>6.2f} "
-                f"{r['strike']:>5.0f} {r['delta']:>5.2f} "
-                f"${r['mid']:>4.2f} {r.get('iv_rank','?'):>3.0f} "
-                f"{r['roi']:>4.2f}% {r.get('kelly',0):>5.1f} "
-                f"{r.get('dte','?'):>3} {flags[:20]}"
+                f"{r['strike']:>5.0f} {r['delta']:>4.2f} "
+                f"${r['mid']:>4.2f} {r.get('iv_rank',0):>3.0f} "
+                f"{r['roi']:>4.2f}% {r.get('kelly',0):>4.1f} "
+                f"{r.get('score',0):>3.0f} {r.get('dte','?'):>3} {flags[:14]}"
             )
         lines.append("```")
 
@@ -182,6 +182,57 @@ def manage_batch_message(alerts: list) -> str:
     lines = [f"## 🧭 MANAGE Scan — {now_et.strftime('%I:%M %p ET')}"]
     for a in alerts:
         lines.append(manage_message(a))
+    return "\n".join(lines)
+
+
+# ── Covered Call watchlist (ENTRY-CC) ────────────────────────────────────────
+
+def cc_watchlist_message(results: list[dict], vix: Optional[float],
+                          target_expiry: str, total: int) -> str:
+    now_et = _dt.datetime.now(ET)
+    lines = [f"## 📞 CC Watchlist — {now_et.strftime('%a %b %d, %I:%M %p ET')}"]
+    lines.append(f"**VIX:** {vix if vix is not None else '?'} | "
+                  f"**Target exp:** {target_expiry} | **Tickers:** {total}")
+    lines.append("")
+
+    if not results:
+        lines.append("*No data returned for any ticker.*")
+        return "\n".join(lines)
+
+    lines.append("```")
+    hdr = (f"{'Tkr':<5} {'Sh':>4} {'Px':>7} {'Str':>6} {'OTM%':>5} "
+           f"{'Δ':>4} {'Mid':>5} {'IVR':>4} {'ROI':>5} {'Kly':>4} "
+           f"{'Scr':>4} {'DTE':>3} Flg")
+    lines.append(hdr)
+    lines.append("-" * min(len(hdr), 78))
+    for r in results:
+        flags = ",".join(r.get("flags", [])) or ("OK" if r["passed"] else "-")
+        lines.append(
+            f"{r['ticker']:<5} {r.get('shares',0):>4} ${r['price']:>6.2f} "
+            f"{r['strike']:>5.0f} {r.get('otm_pct',0):>4.1f}% "
+            f"{r['delta']:>4.2f} ${r['mid']:>4.2f} "
+            f"{r.get('iv_rank',0):>3.0f} {r['roi']:>4.2f}% "
+            f"{r.get('kelly',0):>3.1f} {r.get('score',0):>3.0f} "
+            f"{r.get('dte','?'):>3} {flags[:12]}"
+        )
+    lines.append("```")
+    lines.append("")
+
+    # Highlight actionable
+    actionable = [r for r in results if r["passed"] and r.get("kelly", 0) > 0]
+    if actionable:
+        lines.append("**Actionable picks**")
+        for r in actionable[:5]:
+            shares_note = (f"{r['shares']} sh held" if r.get("shares", 0) >= 100
+                           else "no shares yet — sell-to-open blocked")
+            lines.append(
+                f"• **{r['ticker']}** ${r['strike']:.0f}C @ ${r['mid']:.2f} "
+                f"| {r['otm_pct']:.1f}% OTM | ROI {r['roi']:.2f}% "
+                f"| Kelly {r.get('kelly',0):.1f} | {shares_note}"
+            )
+    else:
+        lines.append("*No actionable CC — all tickers failed filters or Kelly ≤ 0.*")
+
     return "\n".join(lines)
 
 

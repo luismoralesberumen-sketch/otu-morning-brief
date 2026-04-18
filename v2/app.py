@@ -148,6 +148,8 @@ class _Health(BaseHTTPRequestHandler):
                     threading.Thread(target=job_entry_leap, daemon=True).start()
                 elif job == "manage":
                     threading.Thread(target=job_manage, daemon=True).start()
+                elif job == "entry-cc":
+                    threading.Thread(target=job_entry_cc, daemon=True).start()
                 else:
                     self.send_response(400); self.end_headers()
                     self.wfile.write(b"unknown job"); return
@@ -188,6 +190,10 @@ def job_entry_leap():
 def job_manage():
     engine.run_manage(get_schwab_headers(), DISCORD_WEBHOOK_URL)
 
+def job_entry_cc():
+    engine.run_entry_cc(get_schwab_headers(), DISCORD_WEBHOOK_URL,
+                        target_expiry=TARGET_EXPIRY)
+
 def job_refresh_macro():
     macro_calendar.refresh_macro_calendar()
 
@@ -222,6 +228,10 @@ def main():
         sch.add_job(job_entry_leap, "cron", day_of_week="mon-fri", hour=h, minute=33)
         # MANAGE runs 2 minutes later so it doesn't collide with LEAP scan
         sch.add_job(job_manage,     "cron", day_of_week="mon-fri", hour=h, minute=35)
+
+    # ENTRY-CC (Covered Call watchlist): 10:00 + 14:00 Mon-Fri
+    sch.add_job(job_entry_cc, "cron", day_of_week="mon-fri", hour=10, minute=0)
+    sch.add_job(job_entry_cc, "cron", day_of_week="mon-fri", hour=14, minute=0)
 
     # Macro calendar refresh: Sunday 22:00 ET
     sch.add_job(job_refresh_macro, "cron", day_of_week="sun", hour=22, minute=0)
