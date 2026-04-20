@@ -136,8 +136,8 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
 def run_entry_cc(schwab_headers: dict, webhook_url: str,
                  target_expiry: Optional[str] = None) -> int:
     """Scan watchlist and dispatch covered-call candidates batch."""
-    from .engine import _get_vix, TARGET_EXPIRY
-    te = target_expiry or TARGET_EXPIRY
+    from .engine import _get_vix, get_target_expiry
+    te = target_expiry or get_target_expiry()
 
     print(f"\n{'='*60}\n[ENTRY-CC] Covered-Call watchlist scan")
     watch = load_watchlist()
