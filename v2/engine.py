@@ -39,16 +39,20 @@ ET = pytz.timezone("America/New_York")
 TARGET_EXPIRY = "2026-05-15"   # fallback only — replaced by get_target_expiry() at runtime
 
 
-def get_target_expiry(min_dte: int = 25, max_dte: int = 45) -> str:
+def get_target_expiry(min_dte: int = 30, max_dte: int = 60) -> str:
     """
     Always returns a standard monthly expiry (3rd Friday) for maximum
     option liquidity. Weekly options for CORE_WHEEL names have OI < 50
     and spreads > 20%, making them untradeable for the wheel.
 
+    Window: 30-60 DTE (textbook CSP/wheel sweet spot).
+    - <30 DTE: 30-delta strikes often have OI=0 (not enough time to build)
+    - >60 DTE: premium decay too slow, capital tied up too long
+
     Priority:
     1. 3rd-Friday monthly with DTE in [min_dte, max_dte] → ideal
     2. Nearest 3rd-Friday monthly with DTE >= min_dte (even if > max_dte)
-       — better to have liquidity at 55-60 DTE than illiquid weeklies at 35
+       — better to have liquidity at 65 DTE than illiquid strikes at 28
     """
     today = _dt.date.today()
 
