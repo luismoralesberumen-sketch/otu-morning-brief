@@ -257,18 +257,19 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
                 near_miss.append(c)
                 print(f"  {ticker}: filtered ({','.join(c['flags'])})")
                 continue
-            if c["kelly"] <= 0 or c["roi"] < 3.0:
-                c["reject_reason"] = f"low edge (roi={c['roi']}%, kly={c['kelly']})"
+            if c["roi"] < 3.0:
+                c["reject_reason"] = f"ROI_LOW({c['roi']}%<3%)"
                 near_miss.append(c)
-                print(f"  {ticker}: low edge (roi={c['roi']}%, kelly={c['kelly']})")
+                print(f"  {ticker}: ROI too low ({c['roi']}%)")
                 continue
+            # Kelly <= 0 is informational only — still qualify, just rank lower
             qualified.append(c)
             print(f"  {ticker}: OK roi={c['roi']}% kelly={c['kelly']} ivr={c['iv_rank']}")
         except Exception as e:
             print(f"  {ticker}: error {e}")
 
-    # Sort by Kelly desc
-    qualified.sort(key=lambda r: r["kelly"], reverse=True)
+    # Sort by Kelly desc, then score as tiebreaker (kelly=0 candidates go last)
+    qualified.sort(key=lambda r: (r["kelly"], r["score"]), reverse=True)
 
     # Sort near-misses by score desc (so top 5 are most interesting)
     near_miss.sort(key=lambda r: r.get("score", 0), reverse=True)

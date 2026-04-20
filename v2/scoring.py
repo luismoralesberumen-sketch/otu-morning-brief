@@ -71,28 +71,33 @@ def calc_bb(closes: list[float], period: int = 20, mult: float = 2.0):
 
 # ── Backtest win rate (reused from v1, slightly tuned) ───────────────────────
 
-def backtest_win_rate(candles: list[dict], fwd: int = 10,
-                       target: float = 0.03) -> int:
+def backtest_win_rate(candles: list[dict], fwd: int = 30,
+                       otm_pct: float = 0.05) -> int:
     """
-    Setup: RSI 25-55 AND price within 8% above lower BB.
-    Win: +3% in next `fwd` trading days. Returns 0-100 int.
+    Put-selling simulation: for each rolling window in the last 2 years,
+    sell a put at (price * (1 - otm_pct)) and check if the stock stays
+    above that strike over the next `fwd` trading days.
+
+    Win = price at day+fwd >= strike (put expires OTM / worthless).
+    Returns 0-100 int. Default: 5% OTM strike, 30-day hold.
+
+    Expected range for 30-delta puts: 60-75% historically.
     """
     closes = [c["close"] for c in candles]
+    if len(closes) < fwd + 30:
+        return 65  # sensible default when insufficient history
     wins = total = 0
-    for i in range(30, len(candles) - fwd):
-        sub = closes[:i + 1]
-        rsi_i = calc_rsi(sub)
-        _, _, lb = calc_bb(sub)
-        if rsi_i is None or lb is None or lb == 0:
-            continue
-        p = sub[-1]
-        bb_dist = ((p - lb) / lb) * 100.0
-        if 25.0 <= rsi_i <= 55.0 and 0.0 <= bb_dist <= 8.0:
-            total += 1
-            if closes[i + fwd] >= p * (1.0 + target):
-                wins += 1
-    if total < 3:
-        return 50
+    # Slide a window every 5 days to avoid overlapping trades
+    step = 5
+    for i in range(30, len(closes) - fwd, step):
+        price  = closes[i]
+        strike = price * (1.0 - otm_pct)
+        future = closes[i + fwd]
+        total += 1
+        if future >= strike:
+            wins += 1
+    if total < 5:
+        return 65
     return round((wins / total) * 100)
 
 

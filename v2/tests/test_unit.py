@@ -91,9 +91,9 @@ def test_scoring_components():
     assert score_option_liquidity(200, 1.0) == 5
     assert score_option_liquidity(50,  1.0) == 0
 
-    # Backtest: int(15 * wr/100)
+    # Backtest scoring: int(15 * wr/100)
     assert score_backtest(0)   == 0
-    assert score_backtest(50)  == 7
+    assert score_backtest(65)  == 9   # typical put-sell WR
     assert score_backtest(100) == 15
 
     # VIX modifier
@@ -141,12 +141,15 @@ def test_filters():
     assert f_iv_rank(None)[0] is False
 
     assert f_open_interest(150)[0] is True
-    assert f_open_interest(50)[0]  is False
+    assert f_open_interest(50)[0]  is True   # min_oi now 50
+    assert f_open_interest(10)[0]  is False
 
     # 3% spread OK
     assert f_spread(1.00, 1.03)[0] is True
-    # 10% spread too wide
-    assert f_spread(1.00, 1.10)[0] is False
+    # 10% spread: mid=1.055, spread_pct=(0.10/1.055)*100=9.5% → passes now (max 10%)
+    assert f_spread(1.00, 1.10)[0] is True
+    # 25% spread too wide
+    assert f_spread(1.00, 1.25)[0] is False
 
     # sigma: flat series → 0
     assert (stdev_20d([10] * 25) or 0) == 0.0
