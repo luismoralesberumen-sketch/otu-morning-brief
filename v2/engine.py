@@ -36,7 +36,48 @@ def run_entry_cc(schwab_headers: dict, webhook_url: str,
 
 
 ET = pytz.timezone("America/New_York")
-TARGET_EXPIRY = "2026-05-15"   # overridable via env in main.py
+TARGET_EXPIRY = "2026-05-15"   # fallback only — replaced by get_target_expiry() at runtime
+
+
+def get_target_expiry(min_dte: int = 28, max_dte: int = 50) -> str:
+    """
+    Returns the nearest standard monthly options expiry (3rd Friday)
+    whose DTE falls within [min_dte, max_dte].
+
+    If none found in the window, returns the first 3rd-Friday >= min_dte.
+    """
+    today = _dt.date.today()
+
+    def third_friday(year: int, month: int) -> _dt.date:
+        # First day of month
+        first = _dt.date(year, month, 1)
+        # weekday(): Mon=0 … Fri=4
+        # Days until first Friday
+        days_to_fri = (4 - first.weekday()) % 7
+        first_fri = first + _dt.timedelta(days=days_to_fri)
+        return first_fri + _dt.timedelta(weeks=2)  # 3rd Friday
+
+    candidates = []
+    year, month = today.year, today.month
+    for _ in range(6):  # check next 6 monthly expirations
+        tf = third_friday(year, month)
+        dte = (tf - today).days
+        candidates.append((dte, tf))
+        month += 1
+        if month > 12:
+            month = 1; year += 1
+
+    # Prefer expiry whose DTE is in [min_dte, max_dte]
+    in_window = [(dte, tf) for dte, tf in candidates if min_dte <= dte <= max_dte]
+    if in_window:
+        return min(in_window, key=lambda x: x[0])[1].isoformat()
+
+    # Fallback: nearest expiry >= min_dte
+    above = [(dte, tf) for dte, tf in candidates if dte >= min_dte]
+    if above:
+        return min(above, key=lambda x: x[0])[1].isoformat()
+
+    return TARGET_EXPIRY  # last resort
 
 
 # ── Macro (VIX from Yahoo, SPY/EMA200 from Schwab) ───────────────────────────
@@ -186,8 +227,9 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
 # ── Job 1: ENTRY-CSP (Morning Brief) ─────────────────────────────────────────
 
 def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
-                   target_expiry: str = TARGET_EXPIRY) -> int:
-    print(f"\n{'='*60}\n[ENTRY-CSP] Morning Brief — {slot_label} ET")
+                   target_expiry: Optional[str] = None) -> int:
+    target_expiry = target_expiry or get_target_expiry()
+    print(f"\n{'='*60}\n[ENTRY-CSP] Morning Brief — {slot_label} ET | expiry={target_expiry}")
 
     # Refresh macro calendar if stale (weekly)
     if macro_calendar.macro_is_stale(max_age_days=7):
@@ -253,7 +295,8 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
 # ── Job 2: ENTRY-LEAP ────────────────────────────────────────────────────────
 
 def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
-    print(f"\n{'='*60}\n[ENTRY-LEAP] Trade Alerts scan")
+    target_expiry = get_target_expiry()
+    print(f"\n{'='*60}\n[ENTRY-LEAP] Trade Alerts scan | expiry={target_expiry}")
 
     if macro_calendar.macro_is_stale(max_age_days=7):
         macro_calendar.refresh_macro_calendar()
@@ -269,7 +312,7 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
         scanned += 1
         try:
             time.sleep(0.35)
-            c = _evaluate_candidate(schwab_headers, ticker, vix, TARGET_EXPIRY)
+            c = _evaluate_candidate(schwab_headers, ticker, vix, target_expiry)
             if c is None:
                 continue
             if not c["passed"]:

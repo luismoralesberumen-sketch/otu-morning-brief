@@ -37,7 +37,7 @@ def f_iv_rank(iv_rank: Optional[float], min_rank: float = 30.0) -> tuple[bool, s
     return True, ""
 
 
-def f_open_interest(oi: Optional[int], min_oi: int = 100) -> tuple[bool, str]:
+def f_open_interest(oi: Optional[int], min_oi: int = 50) -> tuple[bool, str]:
     if oi is None:
         return False, "OI_UNAVAILABLE"
     if oi < min_oi:
@@ -46,7 +46,7 @@ def f_open_interest(oi: Optional[int], min_oi: int = 100) -> tuple[bool, str]:
 
 
 def f_spread(bid: Optional[float], ask: Optional[float],
-             max_pct: float = 5.0) -> tuple[bool, str]:
+             max_pct: float = 10.0) -> tuple[bool, str]:
     if bid is None or ask is None or ask <= 0:
         return False, "SPREAD_UNAVAILABLE"
     mid = (bid + ask) / 2
