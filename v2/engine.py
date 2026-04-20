@@ -39,7 +39,7 @@ ET = pytz.timezone("America/New_York")
 TARGET_EXPIRY = "2026-05-15"   # fallback only — replaced by get_target_expiry() at runtime
 
 
-def get_target_expiry(min_dte: int = 28, max_dte: int = 45) -> str:
+def get_target_expiry(min_dte: int = 25, max_dte: int = 45) -> str:
     """
     Returns the nearest Friday (weekly or monthly) whose DTE falls
     within [min_dte, max_dte].  Weekly expirations are used when no
