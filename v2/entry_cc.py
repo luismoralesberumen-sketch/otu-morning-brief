@@ -80,6 +80,12 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
         earnings_date=fund.get("earnings_date"),
         closes=closes,
     )
+    # CC-specific: OI threshold is 20, not 50 — you own the shares and only
+    # need enough liquidity to close 1 contract. Remove OI_LOW flag if OI >= 20.
+    _CC_OI_MIN = 20
+    if (opt["open_interest"] or 0) >= _CC_OI_MIN:
+        flags = [f for f in flags if not f.startswith("OI_LOW")]
+    passed = len(flags) == 0
 
     inp = scoring.ConvictionInputs(
         price=price, closes=closes, candles=candles,
@@ -173,9 +179,9 @@ def run_entry_cc(schwab_headers: dict, webhook_url: str,
     )
     discord_output.send(webhook_url, msg)
 
-    # Log one alert per ticker that passed — dedupe 24h
+    # Log one alert per ticker that passed filters + ROI >= 2% — dedupe 24h
     for r in results:
-        if r["passed"] and r.get("kelly", 0) > 0:
+        if r["passed"] and r.get("roi", 0) >= 2.0:
             db.log_alert(r["ticker"], "ENTRY-CC",
                          tier=r.get("tier"), score=r.get("score"))
 

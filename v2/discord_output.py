@@ -265,8 +265,10 @@ def cc_watchlist_message(results: list[dict], vix: Optional[float],
     lines.append("```")
     lines.append("")
 
-    # Highlight actionable
-    actionable = [r for r in results if r["passed"] and r.get("kelly", 0) > 0]
+    # Highlight actionable — CC doesn't use Kelly gate (you own the shares;
+    # Kelly formula favours high ROI which is structurally hard for CCs).
+    # Gate on passed filters + ROI >= 2% instead.
+    actionable = [r for r in results if r["passed"] and r.get("roi", 0) >= 2.0]
     if actionable:
         lines.append("**Actionable picks**")
         for r in actionable[:5]:
