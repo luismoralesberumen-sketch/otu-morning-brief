@@ -39,43 +39,39 @@ ET = pytz.timezone("America/New_York")
 TARGET_EXPIRY = "2026-05-15"   # fallback only — replaced by get_target_expiry() at runtime
 
 
-def get_target_expiry(min_dte: int = 28, max_dte: int = 50) -> str:
+def get_target_expiry(min_dte: int = 28, max_dte: int = 45) -> str:
     """
-    Returns the nearest standard monthly options expiry (3rd Friday)
-    whose DTE falls within [min_dte, max_dte].
+    Returns the nearest Friday (weekly or monthly) whose DTE falls
+    within [min_dte, max_dte].  Weekly expirations are used when no
+    monthly falls in the window — which is common (e.g. nearest monthly
+    at 25 DTE, next at 59 DTE).
 
-    If none found in the window, returns the first 3rd-Friday >= min_dte.
+    Strategy: scan every Friday for the next 90 days, collect those in
+    [min_dte, max_dte], return the one with the smallest DTE (soonest
+    in-range expiry = most liquid, tightest spread).
     """
     today = _dt.date.today()
 
-    def third_friday(year: int, month: int) -> _dt.date:
-        # First day of month
-        first = _dt.date(year, month, 1)
-        # weekday(): Mon=0 … Fri=4
-        # Days until first Friday
-        days_to_fri = (4 - first.weekday()) % 7
-        first_fri = first + _dt.timedelta(days=days_to_fri)
-        return first_fri + _dt.timedelta(weeks=2)  # 3rd Friday
+    # Walk every day for next 90 days, collect Fridays
+    fridays_in_window = []
+    for offset in range(1, 91):
+        d = today + _dt.timedelta(days=offset)
+        if d.weekday() == 4:  # Friday
+            dte = offset
+            if min_dte <= dte <= max_dte:
+                fridays_in_window.append((dte, d))
 
-    candidates = []
-    year, month = today.year, today.month
-    for _ in range(6):  # check next 6 monthly expirations
-        tf = third_friday(year, month)
-        dte = (tf - today).days
-        candidates.append((dte, tf))
-        month += 1
-        if month > 12:
-            month = 1; year += 1
+    if fridays_in_window:
+        # Pick the Friday closest to the middle of the window for best premium
+        mid = (min_dte + max_dte) / 2
+        best = min(fridays_in_window, key=lambda x: abs(x[0] - mid))
+        return best[1].isoformat()
 
-    # Prefer expiry whose DTE is in [min_dte, max_dte]
-    in_window = [(dte, tf) for dte, tf in candidates if min_dte <= dte <= max_dte]
-    if in_window:
-        return min(in_window, key=lambda x: x[0])[1].isoformat()
-
-    # Fallback: nearest expiry >= min_dte
-    above = [(dte, tf) for dte, tf in candidates if dte >= min_dte]
-    if above:
-        return min(above, key=lambda x: x[0])[1].isoformat()
+    # Fallback: first Friday >= min_dte
+    for offset in range(1, 91):
+        d = today + _dt.timedelta(days=offset)
+        if d.weekday() == 4 and offset >= min_dte:
+            return d.isoformat()
 
     return TARGET_EXPIRY  # last resort
 
