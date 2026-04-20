@@ -41,37 +41,42 @@ TARGET_EXPIRY = "2026-05-15"   # fallback only — replaced by get_target_expiry
 
 def get_target_expiry(min_dte: int = 25, max_dte: int = 45) -> str:
     """
-    Returns the nearest Friday (weekly or monthly) whose DTE falls
-    within [min_dte, max_dte].  Weekly expirations are used when no
-    monthly falls in the window — which is common (e.g. nearest monthly
-    at 25 DTE, next at 59 DTE).
+    Always returns a standard monthly expiry (3rd Friday) for maximum
+    option liquidity. Weekly options for CORE_WHEEL names have OI < 50
+    and spreads > 20%, making them untradeable for the wheel.
 
-    Strategy: scan every Friday for the next 90 days, collect those in
-    [min_dte, max_dte], return the one with the smallest DTE (soonest
-    in-range expiry = most liquid, tightest spread).
+    Priority:
+    1. 3rd-Friday monthly with DTE in [min_dte, max_dte] → ideal
+    2. Nearest 3rd-Friday monthly with DTE >= min_dte (even if > max_dte)
+       — better to have liquidity at 55-60 DTE than illiquid weeklies at 35
     """
     today = _dt.date.today()
 
-    # Walk every day for next 90 days, collect Fridays
-    fridays_in_window = []
-    for offset in range(1, 91):
-        d = today + _dt.timedelta(days=offset)
-        if d.weekday() == 4:  # Friday
-            dte = offset
-            if min_dte <= dte <= max_dte:
-                fridays_in_window.append((dte, d))
+    def third_friday(year: int, month: int) -> _dt.date:
+        first = _dt.date(year, month, 1)
+        days_to_fri = (4 - first.weekday()) % 7
+        return first + _dt.timedelta(days=days_to_fri + 14)  # 3rd Friday
 
-    if fridays_in_window:
-        # Pick the Friday closest to the middle of the window for best premium
-        mid = (min_dte + max_dte) / 2
-        best = min(fridays_in_window, key=lambda x: abs(x[0] - mid))
-        return best[1].isoformat()
+    # Build next 6 monthly expirations
+    monthlies: list[tuple[int, _dt.date]] = []
+    y, m = today.year, today.month
+    for _ in range(6):
+        tf = third_friday(y, m)
+        dte = (tf - today).days
+        monthlies.append((dte, tf))
+        m += 1
+        if m > 12:
+            m = 1; y += 1
 
-    # Fallback: first Friday >= min_dte
-    for offset in range(1, 91):
-        d = today + _dt.timedelta(days=offset)
-        if d.weekday() == 4 and offset >= min_dte:
-            return d.isoformat()
+    # 1. Prefer monthly in [min_dte, max_dte]
+    in_window = [(dte, d) for dte, d in monthlies if min_dte <= dte <= max_dte]
+    if in_window:
+        return min(in_window, key=lambda x: x[0])[1].isoformat()
+
+    # 2. Nearest monthly >= min_dte (even if > max_dte — liquidity > DTE constraint)
+    above = [(dte, d) for dte, d in monthlies if dte >= min_dte]
+    if above:
+        return min(above, key=lambda x: x[0])[1].isoformat()
 
     return TARGET_EXPIRY  # last resort
 
