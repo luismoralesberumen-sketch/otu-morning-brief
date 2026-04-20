@@ -51,6 +51,7 @@ def morning_brief_message(
     total_scanned: int,
     target_expiry: str,
     vix_rule: str,
+    near_miss: Optional[list[dict]] = None,
 ) -> str:
     """
     qualified rows must include:
@@ -110,8 +111,52 @@ def morning_brief_message(
     else:
         lines.append("*No qualifying trades — all candidates failed hard filters or Kelly <= 0.*")
 
+    # Near-miss diagnostic list (always useful, but most valuable when qualified is empty)
+    if near_miss:
+        lines.append("")
+        lines.append(f"**Top near-misses ({len(near_miss)})** — highest-scoring candidates that got blocked:")
+        lines.append("```")
+        hdr = f"{'Tkr':<5} {'Scr':>4} {'IVR':>4} {'ROI':>5} {'Kly':>4} Reason"
+        lines.append(hdr); lines.append("-" * min(len(hdr)+30, 72))
+        for r in near_miss[:8]:
+            reason = (r.get("reject_reason") or "-")[:42]
+            lines.append(
+                f"{r['ticker']:<5} {r.get('score',0):>3.0f} "
+                f"{r.get('iv_rank',0):>3.0f} {r.get('roi',0):>4.2f}% "
+                f"{r.get('kelly',0):>3.1f} {reason}"
+            )
+        lines.append("```")
+
     lines.append("")
     lines.append(f"*Data: Schwab API + Yahoo VIX | {now_et.strftime('%H:%M ET')}*")
+    return "\n".join(lines)
+
+
+# ── LEAP scan summary with near-miss diagnostic ──────────────────────────────
+
+def leap_summary_with_near_miss(scanned: int, sent: int, t1_count: int, t2_count: int,
+                                  t1_th: int, t2_th: int, vix: Optional[float],
+                                  near_miss: list[dict]) -> str:
+    now_et = _dt.datetime.now(ET)
+    lines = [
+        f"*🔍 ENTRY-LEAP — {sent} sent / {scanned} scanned "
+        f"| T1={t1_count} T2={t2_count} | VIX {vix} | "
+        f"thresholds T1≥{t1_th} T2≥{t2_th} | {now_et.strftime('%I:%M %p ET')}*"
+    ]
+    if near_miss:
+        lines.append("")
+        lines.append(f"**Top near-misses ({len(near_miss)})**")
+        lines.append("```")
+        hdr = f"{'Tkr':<5} {'Scr':>4} {'IVR':>4} {'ROI':>5} {'Kly':>4} Reason"
+        lines.append(hdr); lines.append("-" * min(len(hdr)+30, 72))
+        for r in near_miss[:8]:
+            reason = (r.get("reject_reason") or "-")[:42]
+            lines.append(
+                f"{r['ticker']:<5} {r.get('score',0):>3.0f} "
+                f"{r.get('iv_rank',0):>3.0f} {r.get('roi',0):>4.2f}% "
+                f"{r.get('kelly',0):>3.1f} {reason}"
+            )
+        lines.append("```")
     return "\n".join(lines)
 
 

@@ -199,6 +199,7 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
     print(f"  VIX={vix} SPY=${macro['spy']} EMA200=${macro['ema200']}")
 
     qualified: list[dict] = []
+    near_miss: list[dict] = []   # evaluated but blocked — useful when 0 qualify
     scanned = 0
     for ticker in universe.CSP_SCAN:
         scanned += 1
@@ -208,11 +209,15 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
             if c is None:
                 print(f"  {ticker}: no data")
                 continue
-            # For the CSP brief we want: passes filters AND kelly > 0 AND roi >= 3%
+            # Track why it failed (for near-miss list)
             if not c["passed"]:
+                c["reject_reason"] = "filters: " + (",".join(c["flags"]) or "-")
+                near_miss.append(c)
                 print(f"  {ticker}: filtered ({','.join(c['flags'])})")
                 continue
             if c["kelly"] <= 0 or c["roi"] < 3.0:
+                c["reject_reason"] = f"low edge (roi={c['roi']}%, kly={c['kelly']})"
+                near_miss.append(c)
                 print(f"  {ticker}: low edge (roi={c['roi']}%, kelly={c['kelly']})")
                 continue
             qualified.append(c)
@@ -223,12 +228,16 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
     # Sort by Kelly desc
     qualified.sort(key=lambda r: r["kelly"], reverse=True)
 
+    # Sort near-misses by score desc (so top 5 are most interesting)
+    near_miss.sort(key=lambda r: r.get("score", 0), reverse=True)
+
     # Build + send
     events = macro_calendar.upcoming_events(days_ahead=5)
     msg = discord_output.morning_brief_message(
         slot_label=slot_label, macro=macro, qualified=qualified,
         upcoming_events=events, total_scanned=scanned,
         target_expiry=target_expiry, vix_rule=macro["vix_rule"],
+        near_miss=near_miss[:8],
     )
     discord_output.send(webhook_url, msg)
 
@@ -254,14 +263,21 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
     print(f"  VIX={vix} | thresholds T1>={t1_th} T2>={t2_th}")
 
     candidates: list[dict] = []
+    near_miss: list[dict] = []
     scanned = 0
     for ticker in universe.LEAP_SCAN:
         scanned += 1
         try:
             time.sleep(0.35)
             c = _evaluate_candidate(schwab_headers, ticker, vix, TARGET_EXPIRY)
-            if c is None or not c["passed"] or c["tier"] is None:
+            if c is None:
                 continue
+            if not c["passed"]:
+                c["reject_reason"] = "filters: " + (",".join(c["flags"]) or "-")
+                near_miss.append(c); continue
+            if c["tier"] is None:
+                c["reject_reason"] = f"score {c['score']} < T2 ({t2_th})"
+                near_miss.append(c); continue
 
             # Dedupe vs DB: skip if already alerted same-or-better tier in 24h
             prev_tier = db.last_alert_tier(ticker, "ENTRY-LEAP", hours=24)
@@ -293,10 +309,11 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
             sent += 1
             time.sleep(0.5)
 
-    # Always send scan summary
-    summary = discord_output.scan_summary_message(
-        "ENTRY-LEAP", scanned, sent,
-        extras=f"T1={t1_count} T2={t2_count}"
+    # Always send scan summary + top near-misses so the user sees what's close
+    near_miss.sort(key=lambda r: r.get("score", 0), reverse=True)
+    summary = discord_output.leap_summary_with_near_miss(
+        scanned=scanned, sent=sent, t1_count=t1_count, t2_count=t2_count,
+        t1_th=t1_th, t2_th=t2_th, vix=vix, near_miss=near_miss[:8],
     )
     discord_output.send(webhook_url, summary)
 
