@@ -116,14 +116,15 @@ def morning_brief_message(
         lines.append("")
         lines.append(f"**Top near-misses ({len(near_miss)})** — highest-scoring candidates that got blocked:")
         lines.append("```")
-        hdr = f"{'Tkr':<5} {'Scr':>4} {'IVR':>4} {'ROI':>5} {'Kly':>4} Reason"
+        hdr = f"{'Tkr':<5} {'Scr':>4} {'IVR':>4} {'ROI':>5} {'WR':>4} Reason"
         lines.append(hdr); lines.append("-" * min(len(hdr)+30, 72))
         for r in near_miss[:8]:
             reason = (r.get("reject_reason") or "-")[:42]
+            wr = r.get("backtest_wr") or r.get("details", {}).get("backtest_wr", 0)
             lines.append(
                 f"{r['ticker']:<5} {r.get('score',0):>3.0f} "
                 f"{r.get('iv_rank',0):>3.0f} {r.get('roi',0):>4.2f}% "
-                f"{r.get('kelly',0):>3.1f} {reason}"
+                f"{wr:>3.0f}% {reason}"
             )
         lines.append("```")
 
@@ -147,14 +148,15 @@ def leap_summary_with_near_miss(scanned: int, sent: int, t1_count: int, t2_count
         lines.append("")
         lines.append(f"**Top near-misses ({len(near_miss)})**")
         lines.append("```")
-        hdr = f"{'Tkr':<5} {'Scr':>4} {'IVR':>4} {'ROI':>5} {'Kly':>4} Reason"
+        hdr = f"{'Tkr':<5} {'Scr':>4} {'IVR':>4} {'ROI':>5} {'WR':>4} Reason"
         lines.append(hdr); lines.append("-" * min(len(hdr)+30, 72))
         for r in near_miss[:8]:
             reason = (r.get("reject_reason") or "-")[:42]
+            wr = r.get("backtest_wr") or r.get("details", {}).get("backtest_wr", 0)
             lines.append(
                 f"{r['ticker']:<5} {r.get('score',0):>3.0f} "
                 f"{r.get('iv_rank',0):>3.0f} {r.get('roi',0):>4.2f}% "
-                f"{r.get('kelly',0):>3.1f} {reason}"
+                f"{wr:>3.0f}% {reason}"
             )
         lines.append("```")
     return "\n".join(lines)

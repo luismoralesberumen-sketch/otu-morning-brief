@@ -175,8 +175,8 @@ def self_ping():
 # ── Job wrappers ─────────────────────────────────────────────────────────────
 
 def job_entry_csp(slot: str):
-    engine.run_entry_csp(get_schwab_headers(), DISCORD_WEBHOOK_URL,
-                         slot, target_expiry=TARGET_EXPIRY)
+    # target_expiry=None → engine.get_target_expiry() picks the right monthly
+    engine.run_entry_csp(get_schwab_headers(), DISCORD_WEBHOOK_URL, slot)
 
 def job_entry_leap():
     engine.run_entry_leap(get_schwab_headers(), DISCORD_WEBHOOK_URL)
@@ -185,8 +185,7 @@ def job_manage():
     engine.run_manage(get_schwab_headers(), DISCORD_WEBHOOK_URL)
 
 def job_entry_cc():
-    engine.run_entry_cc(get_schwab_headers(), DISCORD_WEBHOOK_URL,
-                        target_expiry=TARGET_EXPIRY)
+    engine.run_entry_cc(get_schwab_headers(), DISCORD_WEBHOOK_URL)
 
 def job_refresh_macro():
     macro_calendar.refresh_macro_calendar()
