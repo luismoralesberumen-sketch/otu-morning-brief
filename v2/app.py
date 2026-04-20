@@ -38,31 +38,25 @@ _token_refreshed_at: Optional[datetime.datetime] = None
 
 
 def update_render_env(key: str, value: str) -> None:
+    """Update a single env var via PUT to the per-key endpoint.
+
+    IMPORTANT: never use the bulk PUT /env-vars endpoint — Render's GET
+    does not return values for secrets, so echoing them back wipes every
+    other secret. The per-key PUT endpoint touches only the target key.
+    """
     if not RENDER_API_KEY:
         return
     try:
-        r = requests.get(
-            f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/env-vars",
-            headers={"Authorization": f"Bearer {RENDER_API_KEY}"}, timeout=10,
-        )
-        existing = r.json() if r.status_code == 200 else []
-        env = []
-        found = False
-        for item in existing:
-            ev = item.get("envVar", item)
-            if ev.get("key") == key:
-                env.append({"key": key, "value": value}); found = True
-            else:
-                env.append({"key": ev["key"], "value": ev.get("value", "")})
-        if not found:
-            env.append({"key": key, "value": value})
-        requests.put(
-            f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/env-vars",
+        r = requests.put(
+            f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/env-vars/{key}",
             headers={"Authorization": f"Bearer {RENDER_API_KEY}",
                      "Content-Type": "application/json"},
-            json=env, timeout=10,
+            json={"value": value}, timeout=10,
         )
-        print(f"  Render env {key} updated")
+        if r.status_code in (200, 201):
+            print(f"  Render env {key} updated")
+        else:
+            print(f"  Render env {key}: HTTP {r.status_code} {r.text[:120]}")
     except Exception as e:
         print(f"  Render env update failed: {e}")
 
