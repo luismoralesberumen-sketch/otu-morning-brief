@@ -39,46 +39,40 @@ ET = pytz.timezone("America/New_York")
 TARGET_EXPIRY = "2026-05-15"   # fallback only — replaced by get_target_expiry() at runtime
 
 
-def get_target_expiry(min_dte: int = 30, max_dte: int = 60) -> str:
+def get_target_expiry(min_dte: int = 28, max_dte: int = 35) -> str:
     """
-    Always returns a standard monthly expiry (3rd Friday) for maximum
-    option liquidity. Weekly options for CORE_WHEEL names have OI < 50
-    and spreads > 20%, making them untradeable for the wheel.
+    Returns the nearest Friday (weekly or monthly) in the [28, 35] DTE window
+    — approximately 4-5 weeks out. This is the user's preferred horizon for
+    the wheel: close enough for fast theta decay, far enough to collect
+    meaningful premium.
 
-    Window: 30-60 DTE (textbook CSP/wheel sweet spot).
-    - <30 DTE: 30-delta strikes often have OI=0 (not enough time to build)
-    - >60 DTE: premium decay too slow, capital tied up too long
+    Strategy: scan every Friday for the next 60 days:
+      1. Prefer a Friday in [min_dte, max_dte] — pick the one nearest the
+         centre of the window (best balance of premium vs. time).
+      2. Fallback: nearest Friday >= min_dte if nothing lands in range
+         (e.g., right after a monthly expiry).
 
-    Priority:
-    1. 3rd-Friday monthly with DTE in [min_dte, max_dte] → ideal
-    2. Nearest 3rd-Friday monthly with DTE >= min_dte (even if > max_dte)
-       — better to have liquidity at 65 DTE than illiquid strikes at 28
+    OI / spread filters in the main scan will naturally eliminate any weekly
+    strikes that are illiquid for a given ticker. Liquid names (PLTR, AMD,
+    NVDA, etc.) have solid weekly OI; illiquid ones get flagged and appear
+    in the near-miss list.
     """
     today = _dt.date.today()
 
-    def third_friday(year: int, month: int) -> _dt.date:
-        first = _dt.date(year, month, 1)
-        days_to_fri = (4 - first.weekday()) % 7
-        return first + _dt.timedelta(days=days_to_fri + 14)  # 3rd Friday
+    fridays: list[tuple[int, _dt.date]] = []
+    for offset in range(1, 61):
+        d = today + _dt.timedelta(days=offset)
+        if d.weekday() == 4:          # Friday
+            fridays.append((offset, d))
 
-    # Build next 6 monthly expirations
-    monthlies: list[tuple[int, _dt.date]] = []
-    y, m = today.year, today.month
-    for _ in range(6):
-        tf = third_friday(y, m)
-        dte = (tf - today).days
-        monthlies.append((dte, tf))
-        m += 1
-        if m > 12:
-            m = 1; y += 1
-
-    # 1. Prefer monthly in [min_dte, max_dte]
-    in_window = [(dte, d) for dte, d in monthlies if min_dte <= dte <= max_dte]
+    # 1. All Fridays in [min_dte, max_dte]
+    in_window = [(dte, d) for dte, d in fridays if min_dte <= dte <= max_dte]
     if in_window:
-        return min(in_window, key=lambda x: x[0])[1].isoformat()
+        mid = (min_dte + max_dte) / 2
+        return min(in_window, key=lambda x: abs(x[0] - mid))[1].isoformat()
 
-    # 2. Nearest monthly >= min_dte (even if > max_dte — liquidity > DTE constraint)
-    above = [(dte, d) for dte, d in monthlies if dte >= min_dte]
+    # 2. Nearest Friday >= min_dte
+    above = [(dte, d) for dte, d in fridays if dte >= min_dte]
     if above:
         return min(above, key=lambda x: x[0])[1].isoformat()
 
