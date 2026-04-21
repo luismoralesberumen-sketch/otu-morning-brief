@@ -80,9 +80,9 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
         earnings_date=fund.get("earnings_date"),
         closes=closes,
     )
-    # CC-specific: OI threshold is 20, not 50 — you own the shares and only
-    # need enough liquidity to close 1 contract. Remove OI_LOW flag if OI >= 20.
-    _CC_OI_MIN = 20
+    # CC-specific: OI threshold is 10, not 50 — you own the shares and only
+    # need enough liquidity to close 1 contract. Remove OI_LOW flag if OI >= 10.
+    _CC_OI_MIN = 10
     if (opt["open_interest"] or 0) >= _CC_OI_MIN:
         flags = [f for f in flags if not f.startswith("OI_LOW")]
     passed = len(flags) == 0
