@@ -46,15 +46,25 @@ def f_open_interest(oi: Optional[int], min_oi: int = 50) -> tuple[bool, str]:
 
 
 def f_spread(bid: Optional[float], ask: Optional[float],
-             max_pct: float = 10.0) -> tuple[bool, str]:
+             max_pct: float = 10.0,
+             iv_rank: Optional[float] = None) -> tuple[bool, str]:
+    """
+    Bid/ask spread gate. Default cap is 10% of mid.
+    IVR override: names with IVR >= 65 get a relaxed cap of 15% — high-IVR
+    names often carry wider spreads structurally and the premium edge
+    compensates. Only opens the door, does not lower it.
+    """
     if bid is None or ask is None or ask <= 0:
         return False, "SPREAD_UNAVAILABLE"
     mid = (bid + ask) / 2
     if mid <= 0:
         return False, "SPREAD_BAD_MID"
     spread_pct = (ask - bid) / mid * 100.0
-    if spread_pct > max_pct:
-        return False, f"SPREAD_WIDE({spread_pct:.1f}%>{max_pct:.0f}%)"
+    cap = max_pct
+    if iv_rank is not None and iv_rank >= 65.0:
+        cap = max(cap, 15.0)
+    if spread_pct > cap:
+        return False, f"SPREAD_WIDE({spread_pct:.1f}%>{cap:.0f}%)"
     return True, ""
 
 
@@ -69,11 +79,12 @@ def stdev_20d(closes: list[float]) -> Optional[float]:
 
 def f_earnings_vs_expiry(earnings_date: Optional[str], expiry: str,
                           strike: float, price: float,
-                          closes: list[float]) -> tuple[bool, str]:
+                          closes: list[float],
+                          sigma_buffer: float = 1.5) -> tuple[bool, str]:
     """
     Reject if earnings lands between today and option expiry AND strike is
-    above (price - 1 std dev of 20d returns in $). Logic: a negative earnings
-    surprise would easily blow through the strike.
+    above (price - sigma_buffer * 20d stdev). Buffer widened from 1.0σ → 1.5σ
+    to account for earnings gaps that routinely exceed 1σ moves.
     """
     if not earnings_date:
         return True, ""
@@ -91,9 +102,9 @@ def f_earnings_vs_expiry(earnings_date: Optional[str], expiry: str,
         # Can't evaluate — be safe, reject
         return False, f"EARNINGS_IN_WINDOW({earnings_date})_NO_SIGMA"
 
-    safe_strike = price - sigma
+    safe_strike = price - sigma_buffer * sigma
     if strike > safe_strike:
-        return False, f"EARNINGS_RISK(strike>{safe_strike:.2f}=price-1σ)"
+        return False, f"EARNINGS_RISK(strike>{safe_strike:.2f}=price-{sigma_buffer:.1f}σ)"
     return True, ""
 
 
@@ -129,7 +140,7 @@ def passes_hard_filters(
     for passed, flag in (
         f_iv_rank(iv_rank),
         f_open_interest(open_interest),
-        f_spread(bid, ask),
+        f_spread(bid, ask, iv_rank=iv_rank),
         f_earnings_vs_expiry(earnings_date, expiry, strike, price, closes),
         f_macro_window(hours=24),
     ):

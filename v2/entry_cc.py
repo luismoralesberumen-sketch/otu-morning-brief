@@ -179,11 +179,19 @@ def run_entry_cc(schwab_headers: dict, webhook_url: str,
     )
     discord_output.send(webhook_url, msg)
 
-    # Log one alert per ticker that passed filters + ROI >= 2% — dedupe 24h
+    # Log one alert per ticker that passed filters + ROI >= 3% — dedupe 24h.
+    # Full contract snapshot persisted for Camino B outcome evaluation.
     for r in results:
-        if r["passed"] and r.get("roi", 0) >= 2.0:
-            db.log_alert(r["ticker"], "ENTRY-CC",
-                         tier=r.get("tier"), score=r.get("score"))
+        if r["passed"] and r.get("roi", 0) >= 3.0:
+            db.log_alert(
+                r["ticker"], "ENTRY-CC",
+                tier=r.get("tier"), score=r.get("score"),
+                side="CALL",
+                strike=r.get("strike"), expiry=r.get("expiry"),
+                mid_at_alert=r.get("mid"), delta_at_alert=r.get("delta"),
+                iv_rank_at_alert=r.get("iv_rank"), roi_at_alert=r.get("roi"),
+                price_at_alert=r.get("price"),
+            )
 
     print(f"[ENTRY-CC] Done — {len(results)} evaluated")
     return len(results)

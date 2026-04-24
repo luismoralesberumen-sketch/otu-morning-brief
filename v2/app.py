@@ -18,7 +18,7 @@ from typing import Optional
 import pytz, requests
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from . import engine, macro_calendar, db
+from . import engine, macro_calendar, db, outcomes
 
 
 ET = pytz.timezone("America/New_York")
@@ -190,6 +190,13 @@ def job_entry_cc():
 def job_refresh_macro():
     macro_calendar.refresh_macro_calendar()
 
+def job_evaluate_outcomes():
+    """Camino B — writes alert_outcomes rows at T+7/14/21/30/at-expiry."""
+    try:
+        outcomes.evaluate_pending(get_schwab_headers())
+    except Exception as e:
+        print(f"[OUTCOMES] error: {e}")
+
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -231,6 +238,9 @@ def main():
 
     # Token expiry warning: daily 08:00 ET
     sch.add_job(check_token_expiry_warning, "cron", day_of_week="mon-fri", hour=8, minute=0)
+
+    # Outcome evaluator (Camino B): daily 17:00 ET, after market close
+    sch.add_job(job_evaluate_outcomes, "cron", day_of_week="mon-fri", hour=17, minute=0)
 
     # Keep Render instance warm
     sch.add_job(self_ping, "interval", minutes=10)

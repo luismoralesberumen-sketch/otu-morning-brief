@@ -150,9 +150,9 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
     # IV Rank (cached)
     ivr = iv_rank.compute_iv_rank(schwab_headers, ticker)
 
-    # Option leg near target expiry + 30 delta
+    # Option leg near target expiry + 25 delta (CSP window 0.20-0.30)
     opt = schwab_client.get_put_chain_near_delta(schwab_headers, ticker,
-                                                  target_expiry, target_delta=0.30)
+                                                  target_expiry, target_delta=0.25)
     if opt is None:
         return None
 
@@ -283,10 +283,18 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
     )
     discord_output.send(webhook_url, msg)
 
-    # Log each qualifying ticker to alerts_log
+    # Log each qualifying ticker to alerts_log with full contract snapshot
+    # so the outcome evaluator (Camino B) can measure real performance later.
     for r in qualified:
-        db.log_alert(r["ticker"], "ENTRY-CSP",
-                     tier=r["tier"], score=r["score"])
+        db.log_alert(
+            r["ticker"], "ENTRY-CSP",
+            tier=r["tier"], score=r["score"],
+            side="PUT",
+            strike=r.get("strike"), expiry=r.get("expiry"),
+            mid_at_alert=r.get("mid"), delta_at_alert=r.get("delta"),
+            iv_rank_at_alert=r.get("iv_rank"), roi_at_alert=r.get("roi"),
+            price_at_alert=r.get("price"),
+        )
 
     print(f"[ENTRY-CSP] Done — {len(qualified)} qualifying / {scanned} scanned")
     return len(qualified)
@@ -347,8 +355,19 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
             prev_tier=c.get("prev_tier"),
         )
         if discord_output.send(webhook_url, msg):
-            db.log_alert(c["ticker"], "ENTRY-LEAP",
-                         tier=c["tier"], score=c["score"])
+            d = c.get("details", {}) or {}
+            db.log_alert(
+                c["ticker"], "ENTRY-LEAP",
+                tier=c["tier"], score=c["score"],
+                side="CALL",
+                strike=c.get("strike") or d.get("strike"),
+                expiry=c.get("expiry") or d.get("expiry"),
+                mid_at_alert=c.get("mid") or d.get("mid"),
+                delta_at_alert=c.get("delta") or d.get("delta"),
+                iv_rank_at_alert=c.get("iv_rank"),
+                roi_at_alert=c.get("roi") or d.get("roi"),
+                price_at_alert=c.get("price") or d.get("price"),
+            )
             sent += 1
             time.sleep(0.5)
 

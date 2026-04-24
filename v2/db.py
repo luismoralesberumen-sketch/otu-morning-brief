@@ -55,8 +55,67 @@ def get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         _init_schema(conn)
+        _migrate_schema(conn)
         _CONN = conn
         return _CONN
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Idempotent additive migrations. Never drops or renames."""
+    cur = conn.cursor()
+    # alerts_log: add per-contract snapshot columns for outcome evaluation
+    existing = {r["name"] for r in cur.execute("PRAGMA table_info(alerts_log)").fetchall()}
+    add = []
+    if "side"            not in existing: add.append("side TEXT")              # PUT / CALL
+    if "strike"          not in existing: add.append("strike REAL")
+    if "expiry"          not in existing: add.append("expiry TEXT")            # YYYY-MM-DD
+    if "mid_at_alert"    not in existing: add.append("mid_at_alert REAL")      # premium received proxy
+    if "delta_at_alert"  not in existing: add.append("delta_at_alert REAL")
+    if "iv_rank_at_alert" not in existing: add.append("iv_rank_at_alert REAL")
+    if "roi_at_alert"    not in existing: add.append("roi_at_alert REAL")
+    if "price_at_alert"  not in existing: add.append("price_at_alert REAL")    # underlying at alert
+    for col in add:
+        cur.execute(f"ALTER TABLE alerts_log ADD COLUMN {col}")
+
+    cur.executescript("""
+    -- Outcome evaluation per alert at T+N checkpoints
+    CREATE TABLE IF NOT EXISTS alert_outcomes (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id        INTEGER NOT NULL,
+        eval_date       TEXT    NOT NULL,        -- YYYY-MM-DD
+        days_since      INTEGER NOT NULL,        -- 7 / 14 / 21 / 30 / at_expiry
+        price_at_eval   REAL,
+        pct_to_strike   REAL,                    -- (price - strike) / strike * 100
+        outcome_class   TEXT,                    -- OTM_SAFE | ITM_TOUCH | BREACHED | EXPIRED_OTM | EXPIRED_ITM
+        pnl_est_pct     REAL,                    -- estimated P/L% on premium basis
+        notes           TEXT,
+        UNIQUE(alert_id, days_since),
+        FOREIGN KEY(alert_id) REFERENCES alerts_log(id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_outcomes_alert ON alert_outcomes(alert_id);
+    CREATE INDEX IF NOT EXISTS ix_outcomes_eval  ON alert_outcomes(eval_date);
+
+    -- Shadow-mode v2.5 probability logging (runs alongside; does not gate decisions)
+    CREATE TABLE IF NOT EXISTS probability_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id    INTEGER,
+        ticker      TEXT    NOT NULL,
+        side        TEXT    NOT NULL,
+        created_at  TEXT    NOT NULL,
+        regime      TEXT,                         -- e.g. "VIX15-20/above50"
+        p_tech      REAL,
+        p_macro     REAL,
+        p_fund      REAL,
+        p_flow      REAL,
+        p_sent      REAL,
+        p_total     REAL,
+        ev_pct      REAL,
+        kelly_adj   REAL,
+        FOREIGN KEY(alert_id) REFERENCES alerts_log(id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_plog_ticker ON probability_log(ticker, created_at);
+    """)
+    conn.commit()
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
@@ -124,15 +183,103 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
 def log_alert(ticker: str, tipo: str, tier: Optional[int] = None,
               score: Optional[int] = None, subtype: Optional[str] = None,
-              filled_bool: bool = False) -> int:
-    """Insert an alert record. Returns the row id."""
+              filled_bool: bool = False,
+              # Per-contract snapshot (Camino B — outcome evaluation)
+              side: Optional[str] = None,
+              strike: Optional[float] = None,
+              expiry: Optional[str] = None,
+              mid_at_alert: Optional[float] = None,
+              delta_at_alert: Optional[float] = None,
+              iv_rank_at_alert: Optional[float] = None,
+              roi_at_alert: Optional[float] = None,
+              price_at_alert: Optional[float] = None) -> int:
+    """Insert an alert record. Returns the row id.
+
+    The extended fields (strike/expiry/mid/delta/ivr/roi/price) are used by the
+    outcome evaluator to measure real performance at T+7/14/21/30. All are
+    optional — legacy callers continue to work.
+    """
     conn = get_conn()
     ts = _dt.datetime.utcnow().isoformat(timespec="seconds")
     with _DB_LOCK:
         cur = conn.execute(
-            "INSERT INTO alerts_log (ticker, tier, score, timestamp, tipo, subtype, filled_bool) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (ticker, tier, score, ts, tipo, subtype, 1 if filled_bool else 0)
+            "INSERT INTO alerts_log (ticker, tier, score, timestamp, tipo, subtype, filled_bool, "
+            "  side, strike, expiry, mid_at_alert, delta_at_alert, iv_rank_at_alert, "
+            "  roi_at_alert, price_at_alert) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ticker, tier, score, ts, tipo, subtype, 1 if filled_bool else 0,
+             side, strike, expiry, mid_at_alert, delta_at_alert, iv_rank_at_alert,
+             roi_at_alert, price_at_alert)
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+# ── alert_outcomes (Camino B) ────────────────────────────────────────────────
+
+def upsert_outcome(alert_id: int, days_since: int, eval_date: str,
+                    price_at_eval: Optional[float], pct_to_strike: Optional[float],
+                    outcome_class: str, pnl_est_pct: Optional[float] = None,
+                    notes: Optional[str] = None) -> None:
+    conn = get_conn()
+    with _DB_LOCK:
+        conn.execute(
+            "INSERT INTO alert_outcomes (alert_id, eval_date, days_since, price_at_eval, "
+            "  pct_to_strike, outcome_class, pnl_est_pct, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(alert_id, days_since) DO UPDATE SET "
+            "  eval_date=excluded.eval_date, price_at_eval=excluded.price_at_eval, "
+            "  pct_to_strike=excluded.pct_to_strike, outcome_class=excluded.outcome_class, "
+            "  pnl_est_pct=excluded.pnl_est_pct, notes=excluded.notes",
+            (alert_id, eval_date, days_since, price_at_eval, pct_to_strike,
+             outcome_class, pnl_est_pct, notes)
+        )
+        conn.commit()
+
+
+def alerts_pending_evaluation(days_since_min: int = 7) -> list[sqlite3.Row]:
+    """
+    Return alerts that are >= days_since_min old and lack an outcome row for
+    the corresponding checkpoint. Caller picks the checkpoint per alert.
+    Only ENTRY-* alerts with strike+expiry populated are returned.
+    """
+    conn = get_conn()
+    cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=days_since_min)).isoformat(timespec="seconds")
+    return conn.execute(
+        "SELECT a.* FROM alerts_log a "
+        "WHERE a.tipo LIKE 'ENTRY-%' "
+        "  AND a.strike IS NOT NULL AND a.expiry IS NOT NULL "
+        "  AND a.timestamp <= ? "
+        "ORDER BY a.timestamp ASC",
+        (cutoff,)
+    ).fetchall()
+
+
+def outcomes_for_alert(alert_id: int) -> list[sqlite3.Row]:
+    conn = get_conn()
+    return conn.execute(
+        "SELECT * FROM alert_outcomes WHERE alert_id=? ORDER BY days_since ASC",
+        (alert_id,)
+    ).fetchall()
+
+
+# ── probability_log (v2.5 shadow-mode) ───────────────────────────────────────
+
+def log_probability(ticker: str, side: str, alert_id: Optional[int] = None,
+                     regime: Optional[str] = None,
+                     p_tech: Optional[float] = None, p_macro: Optional[float] = None,
+                     p_fund: Optional[float] = None, p_flow: Optional[float] = None,
+                     p_sent: Optional[float] = None, p_total: Optional[float] = None,
+                     ev_pct: Optional[float] = None, kelly_adj: Optional[float] = None) -> int:
+    conn = get_conn()
+    ts = _dt.datetime.utcnow().isoformat(timespec="seconds")
+    with _DB_LOCK:
+        cur = conn.execute(
+            "INSERT INTO probability_log (alert_id, ticker, side, created_at, regime, "
+            "  p_tech, p_macro, p_fund, p_flow, p_sent, p_total, ev_pct, kelly_adj) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (alert_id, ticker, side, ts, regime, p_tech, p_macro, p_fund, p_flow,
+             p_sent, p_total, ev_pct, kelly_adj)
         )
         conn.commit()
         return cur.lastrowid

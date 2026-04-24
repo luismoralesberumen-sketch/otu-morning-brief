@@ -267,8 +267,8 @@ def cc_watchlist_message(results: list[dict], vix: Optional[float],
 
     # Highlight actionable — CC doesn't use Kelly gate (you own the shares;
     # Kelly formula favours high ROI which is structurally hard for CCs).
-    # Gate on passed filters + ROI >= 2% instead.
-    actionable = [r for r in results if r["passed"] and r.get("roi", 0) >= 2.0]
+    # Gate on passed filters + ROI >= 3% instead.
+    actionable = [r for r in results if r["passed"] and r.get("roi", 0) >= 3.0]
     if actionable:
         lines.append("**Actionable picks**")
         for r in actionable[:5]:
@@ -288,7 +288,7 @@ def cc_watchlist_message(results: list[dict], vix: Optional[float],
                 f"| Kelly {r.get('kelly',0):.1f} | {shares_note}"
             )
     else:
-        lines.append("*No actionable CC — all tickers failed filters or Kelly ≤ 0.*")
+        lines.append("*No actionable CC — all tickers failed filters or ROI < 3%.*")
 
     # Also surface tickers where strike is below cost, even if not in top 5
     risky = [r for r in results if r.get("below_cost") and r.get("shares", 0) >= 100]

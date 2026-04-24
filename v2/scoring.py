@@ -71,31 +71,87 @@ def calc_bb(closes: list[float], period: int = 20, mult: float = 2.0):
 
 # ── Backtest win rate (reused from v1, slightly tuned) ───────────────────────
 
+def _sma_at(closes: list[float], idx: int, period: int = 50) -> Optional[float]:
+    if idx < period:
+        return None
+    w = closes[idx - period: idx]
+    return sum(w) / period
+
+
 def backtest_win_rate(candles: list[dict], fwd: int = 30,
-                       otm_pct: float = 0.05) -> int:
+                       otm_pct: float = 0.05,
+                       regime_aware: bool = True,
+                       vix_series: Optional[list[float]] = None,
+                       current_vix: Optional[float] = None) -> int:
     """
-    Put-selling simulation: for each rolling window in the last 2 years,
-    sell a put at (price * (1 - otm_pct)) and check if the stock stays
-    above that strike over the next `fwd` trading days.
+    Put-selling simulation with optional regime filtering.
 
-    Win = price at day+fwd >= strike (put expires OTM / worthless).
-    Returns 0-100 int. Default: 5% OTM strike, 30-day hold.
+    Base mechanic: for each rolling window, sell a put at price*(1-otm_pct)
+    and check if price at day+fwd stays above that strike.
 
-    Expected range for 30-delta puts: 60-75% historically.
+    Regime-aware mode (default): only counts past windows whose regime
+    matches TODAY's regime:
+      • Trend regime  : stock above/below its own 50d SMA
+      • VIX bucket    : <15 / 15-20 / 20-30 / >30  (used only if vix_series
+                        and current_vix are supplied, and aligned to candles)
+
+    If too few regime-matched windows (<5) the function falls back to the
+    full unsegmented WR so we don't starve the score.
+
+    Returns int 0-100. Default fallback when history insufficient: 65.
     """
     closes = [c["close"] for c in candles]
-    if len(closes) < fwd + 30:
-        return 65  # sensible default when insufficient history
+    if len(closes) < fwd + 60:
+        return 65
+
+    # Determine TODAY's regime
+    today_sma50 = _sma_at(closes, len(closes), 50)
+    today_trend_up = (today_sma50 is not None) and (closes[-1] >= today_sma50)
+
+    def _vix_bucket(v: Optional[float]) -> Optional[int]:
+        if v is None: return None
+        if v < 15:  return 0
+        if v < 20:  return 1
+        if v < 30:  return 2
+        return 3
+    today_vbucket = _vix_bucket(current_vix) if regime_aware else None
+
+    have_vix_series = (
+        regime_aware and vix_series is not None
+        and len(vix_series) == len(closes)
+        and today_vbucket is not None
+    )
+
     wins = total = 0
-    # Slide a window every 5 days to avoid overlapping trades
+    matched_wins = matched_total = 0
     step = 5
-    for i in range(30, len(closes) - fwd, step):
+    for i in range(50, len(closes) - fwd, step):
         price  = closes[i]
         strike = price * (1.0 - otm_pct)
         future = closes[i + fwd]
+        win = future >= strike
         total += 1
-        if future >= strike:
-            wins += 1
+        if win: wins += 1
+
+        if not regime_aware:
+            continue
+
+        # Regime match: trend + (optional) VIX bucket
+        past_sma = _sma_at(closes, i, 50)
+        if past_sma is None:
+            continue
+        past_trend_up = price >= past_sma
+        if past_trend_up != today_trend_up:
+            continue
+        if have_vix_series:
+            if _vix_bucket(vix_series[i]) != today_vbucket:
+                continue
+
+        matched_total += 1
+        if win: matched_wins += 1
+
+    if regime_aware and matched_total >= 5:
+        return round((matched_wins / matched_total) * 100)
     if total < 5:
         return 65
     return round((wins / total) * 100)
@@ -133,11 +189,19 @@ def score_support(price: float, lower_bb: Optional[float],
 
 
 def score_rsi_zone(rsi: Optional[float]) -> int:
+    """
+    Preference: RSI below 50 (oversold/neutral). We are selling premium on
+    puts — we want names that are NOT extended to the upside.
+      30-50 : full credit (sweet spot)
+      20-30 : oversold bonus
+      50-55 : partial credit
+      >55 or <20 : no credit (over-extended or broken)
+    """
     if rsi is None:
         return 0
-    if 35 <= rsi <= 55: return 15
-    if 25 <= rsi < 35:  return 10
-    if 55 <  rsi <= 65: return 8
+    if 30 <= rsi <= 50: return 15
+    if 20 <= rsi < 30:  return 12
+    if 50 <  rsi <= 55: return 7
     return 0
 
 
