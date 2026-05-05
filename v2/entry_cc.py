@@ -91,6 +91,7 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
         price=price, closes=closes, candles=candles,
         iv_rank=ivr, pe_positive=fund["pe_positive"], beats_4q=fund["beats_4q"],
         open_interest=opt["open_interest"], spread_pct_of_mid=spread_pct,
+        side="CALL",  # CC is bullish — favor RSI 50-65 momentum
     )
     base_score, details = scoring.calc_conviction(inp)
     score = scoring.apply_vix_modifier(base_score, vix)

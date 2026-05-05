@@ -188,17 +188,31 @@ def score_support(price: float, lower_bb: Optional[float],
     return 8
 
 
-def score_rsi_zone(rsi: Optional[float]) -> int:
+def score_rsi_zone(rsi: Optional[float], side: str = "PUT") -> int:
     """
-    Preference: RSI below 50 (oversold/neutral). We are selling premium on
-    puts — we want names that are NOT extended to the upside.
+    RSI preference depends on the trade direction:
+
+    PUT (CSP — selling puts on pullbacks): we want names NOT extended up.
       30-50 : full credit (sweet spot)
       20-30 : oversold bonus
       50-55 : partial credit
-      >55 or <20 : no credit (over-extended or broken)
+      else  : 0
+
+    CALL (LEAP buy / CC sell — directional bullish): we want momentum
+    without exhaustion.
+      50-65 : full credit (healthy uptrend)
+      45-50 : partial (just turning up)
+      65-70 : partial (slight overbought, still ok)
+      <45 or >70 : 0 (broken or exhausted)
     """
     if rsi is None:
         return 0
+    if side == "CALL":
+        if 50 <= rsi <= 65: return 15
+        if 45 <= rsi < 50:  return 8
+        if 65 <  rsi <= 70: return 8
+        return 0
+    # default PUT
     if 30 <= rsi <= 50: return 15
     if 20 <= rsi < 30:  return 12
     if 50 <  rsi <= 55: return 7
@@ -238,6 +252,7 @@ class ConvictionInputs:
     beats_4q:    bool
     open_interest: Optional[int]
     spread_pct_of_mid: Optional[float]
+    side:        str = "PUT"        # "PUT" (CSP) or "CALL" (LEAP/CC)
 
 
 def calc_conviction(inp: ConvictionInputs) -> tuple[int, dict]:
@@ -274,7 +289,7 @@ def calc_conviction(inp: ConvictionInputs) -> tuple[int, dict]:
     score = 0
     score += score_iv_rank(inp.iv_rank)
     score += score_support(inp.price, lower, ema50, ema200)
-    score += score_rsi_zone(rsi)
+    score += score_rsi_zone(rsi, side=inp.side)
     score += score_fundamentals(inp.pe_positive, inp.beats_4q)
     score += score_option_liquidity(inp.open_interest, inp.spread_pct_of_mid)
     score += score_backtest(wr)

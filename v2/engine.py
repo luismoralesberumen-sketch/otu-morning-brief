@@ -135,11 +135,18 @@ def _vix_rule(vix: Optional[float]) -> str:
 # ── Shared candidate builder ─────────────────────────────────────────────────
 
 def _evaluate_candidate(schwab_headers: dict, ticker: str,
-                        vix: Optional[float], target_expiry: str) -> Optional[dict]:
+                        vix: Optional[float], target_expiry: str,
+                        side: str = "PUT") -> Optional[dict]:
     """
     Runs the full pipeline for one ticker. Returns a dict with everything the
     caller needs to decide (tier, score, filters, ROI, Kelly). Returns None on
     any unrecoverable error.
+
+    side: "PUT" for CSP scoring (favors low RSI, pullbacks)
+          "CALL" for LEAP scoring (favors momentum RSI 50-65)
+    Note: option leg is always a put — `side` only affects the RSI scoring
+    component since LEAPs evaluated through _evaluate_candidate are using the
+    same put-selling backtest as a proxy for general bullish setup quality.
     """
     candles = schwab_client.get_daily_candles(schwab_headers, ticker)
     if len(candles) < 50:
@@ -177,11 +184,12 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
         closes=closes,
     )
 
-    # Conviction score
+    # Conviction score (side-aware RSI scoring)
     inp = scoring.ConvictionInputs(
         price=price, closes=closes, candles=candles,
         iv_rank=ivr, pe_positive=fund["pe_positive"], beats_4q=fund["beats_4q"],
         open_interest=opt["open_interest"], spread_pct_of_mid=spread_pct,
+        side=side,
     )
     base_score, details = scoring.calc_conviction(inp)
     score = scoring.apply_vix_modifier(base_score, vix)
@@ -246,7 +254,7 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
         scanned += 1
         try:
             time.sleep(0.35)
-            c = _evaluate_candidate(schwab_headers, ticker, vix, target_expiry)
+            c = _evaluate_candidate(schwab_headers, ticker, vix, target_expiry, side="PUT")
             if c is None:
                 print(f"  {ticker}: no data")
                 continue
@@ -320,7 +328,7 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
         scanned += 1
         try:
             time.sleep(0.35)
-            c = _evaluate_candidate(schwab_headers, ticker, vix, target_expiry)
+            c = _evaluate_candidate(schwab_headers, ticker, vix, target_expiry, side="CALL")
             if c is None:
                 continue
             if not c["passed"]:
