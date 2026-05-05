@@ -176,11 +176,19 @@ def get_call_chain_near_delta(headers: dict, ticker: str,
             headers=headers,
             timeout=15,
         )
+        if r.status_code != 200:
+            print(f"  [CHAIN-CALL] {ticker}: HTTP {r.status_code} {r.text[:120]}")
+            return None
         chain = r.json()
-        if chain.get("status") == "FAILED" or "callExpDateMap" not in chain:
+        if chain.get("status") == "FAILED":
+            print(f"  [CHAIN-CALL] {ticker}: status=FAILED resp={str(chain)[:200]}")
+            return None
+        if "callExpDateMap" not in chain:
+            print(f"  [CHAIN-CALL] {ticker}: no callExpDateMap key (keys={list(chain.keys())[:5]})")
             return None
         underlying = chain.get("underlyingPrice", 0)
         if not underlying:
+            print(f"  [CHAIN-CALL] {ticker}: underlyingPrice=0 / missing")
             return None
 
         today = _dt.date.today()
@@ -190,6 +198,7 @@ def get_call_chain_near_delta(headers: dict, ticker: str,
             target_date = today + _dt.timedelta(days=30)
         target_dte = max(7, (target_date - today).days)
 
+        available_exps = list(chain["callExpDateMap"].keys())
         best_exp, best_diff = None, 999
         for exp_key in chain["callExpDateMap"]:
             exp_date = _dt.date.fromisoformat(exp_key.split(":")[0])
@@ -201,12 +210,16 @@ def get_call_chain_near_delta(headers: dict, ticker: str,
                 best_diff = diff
                 best_exp = exp_key
         if best_exp is None:
+            print(f"  [CHAIN-CALL] {ticker}: no expiry >= 7 DTE found "
+                  f"(target={target_expiry}, available={available_exps[:3]})")
             return None
 
+        deltas_seen = []
         best_contract, best_dd = None, 999
         for strike_str, contracts in chain["callExpDateMap"][best_exp].items():
             c = contracts[0]
             d = abs(c.get("delta", 0))
+            deltas_seen.append((float(strike_str), d))
             if not d:
                 continue
             diff = abs(d - target_delta)
@@ -214,6 +227,9 @@ def get_call_chain_near_delta(headers: dict, ticker: str,
                 best_dd = diff
                 best_contract = (float(strike_str), c)
         if best_contract is None:
+            sample = ", ".join(f"K{k}=Δ{d}" for k, d in deltas_seen[:5])
+            print(f"  [CHAIN-CALL] {ticker}: no strike with non-zero delta near {target_delta} "
+                  f"in exp {best_exp.split(':')[0]} (sample: {sample})")
             return None
 
         strike, c = best_contract

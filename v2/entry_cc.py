@@ -47,8 +47,10 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
     ticker = entry["ticker"]
     target_delta = float(entry.get("target_delta", 0.25))
 
+    # Verbose diagnostic logging — answers "why did this ticker return None?"
     candles = schwab_client.get_daily_candles(schwab_headers, ticker)
     if len(candles) < 50:
+        print(f"  [CC-FAIL] {ticker}: candles too short ({len(candles)}<50) — Schwab API issue or new IPO")
         return None
     closes = [c["close"] for c in candles]
     price  = closes[-1]
@@ -60,7 +62,12 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
         schwab_headers, ticker, target_expiry, target_delta=target_delta
     )
     if opt is None:
+        print(f"  [CC-FAIL] {ticker}: call chain returned None "
+              f"(target_expiry={target_expiry}, target_delta={target_delta}, "
+              f"price=${price:.2f}) — chain empty / no strike near target delta / API error")
         return None
+    print(f"  [CC-OK] {ticker}: K=${opt['strike']} mid=${opt['mid']} delta={opt['delta']} "
+          f"OI={opt['open_interest']} IV={opt['iv']:.1f}% exp={opt['expiry']}")
 
     fund = fundamentals.get_fundamentals(ticker)
 
