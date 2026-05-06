@@ -264,8 +264,12 @@ def run_entry_csp(schwab_headers: dict, webhook_url: str, slot_label: str,
                 near_miss.append(c)
                 print(f"  {ticker}: filtered ({','.join(c['flags'])})")
                 continue
-            if c["roi"] < 3.0:
-                c["reject_reason"] = f"ROI_LOW({c['roi']}%<3%)"
+            # ROI gate calibrated for CSP at ~30 DTE: 1.5% = 18% annualized,
+            # which is the OTU wheel target. The previous 3% (=36% annualized)
+            # was killing premium names like COST/XOM/MCD that yield ~1-2%.
+            _CSP_ROI_MIN = 1.5
+            if c["roi"] < _CSP_ROI_MIN:
+                c["reject_reason"] = f"ROI_LOW({c['roi']}%<{_CSP_ROI_MIN}%)"
                 near_miss.append(c)
                 print(f"  {ticker}: ROI too low ({c['roi']}%)")
                 continue
