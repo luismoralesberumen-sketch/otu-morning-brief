@@ -160,21 +160,32 @@ def backtest_win_rate(candles: list[dict], fwd: int = 30,
 # ── Component scoring (pure functions, 0-N points) ───────────────────────────
 
 def score_iv_rank(iv_rank: Optional[float]) -> int:
+    """
+    Calibrated for low-VIX market reality: in regimes where VIX<20,
+    individual ticker IVRs cluster in the 15-35 range. Hard binary at
+    IVR=30 was killing baseline scores. Now IVR≥20 gets 5pts (some
+    edge), IVR≥30 gets 10 (decent), IVR≥50 gets 18 (good), IVR≥70 gets 25 (premium).
+    """
     if iv_rank is None:
         return 0
     if iv_rank >= 70: return 25
     if iv_rank >= 50: return 18
     if iv_rank >= 30: return 10
+    if iv_rank >= 20: return 5
     return 0
 
 
 def score_support(price: float, lower_bb: Optional[float],
                   ema50: Optional[float], ema200: Optional[float]) -> int:
     """
-    20 pts: touching lower BB + above EMA200
-    12 pts: within 5% above lower BB + above EMA200
-     8 pts: above EMA200 only
-     0 pts: below EMA200
+    Recalibrated: above EMA200 baseline reward up from 8→12. In a healthy
+    uptrend, most tickers will sit above EMA200 without touching lower BB
+    for weeks; treating that as "barely passing" was wrong.
+
+    20 pts: touching lower BB + above EMA200 (textbook entry)
+    14 pts: within 5% above lower BB + above EMA200 (close to support)
+    12 pts: above EMA200 only (healthy uptrend baseline)
+     0 pts: below EMA200 (trend broken)
     """
     if ema200 is None:
         return 0
@@ -184,8 +195,8 @@ def score_support(price: float, lower_bb: Optional[float],
     if lower_bb is not None and lower_bb > 0:
         bb_dist_pct = (price - lower_bb) / lower_bb * 100.0
         if bb_dist_pct <= 0:       return 20
-        if bb_dist_pct <= 5:       return 12
-    return 8
+        if bb_dist_pct <= 5:       return 14
+    return 12
 
 
 def score_rsi_zone(rsi: Optional[float], side: str = "PUT") -> int:
@@ -311,16 +322,19 @@ def apply_vix_modifier(base_score: int, vix: Optional[float]) -> int:
 
 def tier_thresholds(vix: Optional[float]) -> tuple[int, int]:
     """
-    Returns (T1_threshold, T2_threshold) based on VIX regime.
-      VIX >= 21: 72 / 55
-      VIX 15-20: 76 / 60 (baseline)
-      VIX <  15: 82 / 68
+    Recalibrated 2026-05-06 after observing 0/40 LEAP candidates in normal
+    market conditions (VIX 17, uptrend). Lowered T1/T2 by ~4 pts per bucket
+    so a "healthy uptrend with decent IVR" actually clears T2.
+
+      VIX >= 21: T1=68, T2=52   (high vol — be permissive, more premium)
+      VIX 15-21: T1=72, T2=56   (baseline — normal conditions)
+      VIX <  15: T1=78, T2=64   (low vol — be selective)
     """
     if vix is None:
-        return 76, 60
-    if vix >= 21: return 72, 55
-    if vix < 15:  return 82, 68
-    return 76, 60
+        return 72, 56
+    if vix >= 21: return 68, 52
+    if vix < 15:  return 78, 64
+    return 72, 56
 
 
 def classify_tier(score: int, vix: Optional[float]) -> tuple[Optional[int], str]:
