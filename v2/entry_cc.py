@@ -105,7 +105,7 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
     tier, tier_desc = scoring.classify_tier(score, vix)
 
     wr = details.get("backtest_wr", 50)
-    kelly_s = kelly.kelly_score(opt["roi"], wr, max_loss_pct=15.0)
+    kelly_s = kelly.kelly_score(opt["roi"], wr, max_loss_pct=7.0)
 
     dte = (_dt.date.fromisoformat(opt["expiry"]) - _dt.date.today()).days
 

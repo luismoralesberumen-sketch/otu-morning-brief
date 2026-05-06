@@ -10,8 +10,10 @@ where
 
 For short puts in the OTU Wheel:
     win_amount  = premium (ROI%)
-    risk_amount = assigned-loss estimate (max_loss_pct)
-                  default = strike * (1 - stop_loss_floor)
+    risk_amount = realistic max_loss for managed CSP (~7%, not 15%)
+                  Reflects: rolling at 21 DTE, take-profit at 50%,
+                  defensive close if assignment likely. Full 15% max
+                  loss only happens with passive hold-to-expiry.
 
 We use Kelly to *rank* candidates — larger f* means more edge per
 unit of risk. We DO NOT size positions to full Kelly (typical practice:
@@ -44,7 +46,7 @@ def kelly_fraction(roi_pct: float, win_rate_pct: float,
 
 
 def kelly_score(roi_pct: float, win_rate_pct: float,
-                max_loss_pct: float = 15.0) -> float:
+                max_loss_pct: float = 7.0) -> float:
     """
     Ranking metric: f* * roi. Higher is better.
     Zero or negative => no edge, filter from ranking.
@@ -56,7 +58,7 @@ def kelly_score(roi_pct: float, win_rate_pct: float,
 
 
 def kelly_details(roi_pct: float, win_rate_pct: float,
-                  max_loss_pct: float = 15.0) -> dict:
+                  max_loss_pct: float = 7.0) -> dict:
     """Debug payload — used in Discord footer when requested."""
     f = kelly_fraction(roi_pct, win_rate_pct, max_loss_pct)
     return {
