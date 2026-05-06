@@ -324,12 +324,14 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
     candidates: list[dict] = []
     near_miss: list[dict] = []
     scanned = 0
+    none_count = 0  # Track Schwab data failures for health alert
     for ticker in universe.LEAP_SCAN:
         scanned += 1
         try:
             time.sleep(0.35)
             c = _evaluate_candidate(schwab_headers, ticker, vix, target_expiry, side="CALL")
             if c is None:
+                none_count += 1
                 continue
             if not c["passed"]:
                 c["reject_reason"] = "filters: " + (",".join(c["flags"]) or "-")
@@ -347,6 +349,17 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
             candidates.append(c)
         except Exception as e:
             print(f"  {ticker}: error {e}")
+
+    # Health check: if >50% of tickers returned no data, Schwab token is broken
+    if scanned > 0 and none_count >= scanned * 0.5:
+        alert_msg = (
+            f"🚨 **Schwab API health alert** — ENTRY-LEAP scan: "
+            f"{none_count}/{scanned} tickers returned no data ({none_count*100//scanned}%).\n"
+            f"Likely cause: refresh token expired or rate-limited.\n"
+            f"Action: run `python C:\\Users\\THINKPAD\\schwab_quick_auth.py` to re-auth."
+        )
+        discord_output.send(webhook_url, alert_msg)
+        print(f"  [HEALTH] {none_count}/{scanned} None — sent re-auth alert")
 
     # Sort by score desc (T1 before T2)
     candidates.sort(key=lambda r: r["score"], reverse=True)
