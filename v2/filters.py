@@ -116,6 +116,21 @@ def f_macro_window(hours: int = 24) -> tuple[bool, str]:
     return True, ""
 
 
+def f_macd(macd_state: Optional[dict]) -> tuple[bool, str]:
+    """
+    MACD momentum filter — applied to CSPs (selling puts).
+    Block if MACD is bearish AND not rising (=falling momentum).
+    Aligned with Pine v2.1: macdOk = macdRising OR macdBull.
+    """
+    if macd_state is None:
+        return True, ""  # insufficient history → don't block, just log
+    if not macd_state.get("ok", True):
+        macd_v   = macd_state.get("macd", 0)
+        signal_v = macd_state.get("signal", 0)
+        return False, f"MACD_BEAR(macd={macd_v} sig={signal_v})"
+    return True, ""
+
+
 # ── Composite ────────────────────────────────────────────────────────────────
 
 def passes_hard_filters(
@@ -129,21 +144,32 @@ def passes_hard_filters(
     expiry:        str,
     earnings_date: Optional[str],
     closes:        list[float],
+    macd_state:    Optional[dict] = None,
+    side:          str = "PUT",
 ) -> tuple[bool, list[str]]:
     """
     Returns (passed_all, flags).
     flags always contains every failing reason (not just the first) so the
     Discord log can explain why a near-miss was skipped.
+
+    side="PUT" (CSP): MACD applied as hard filter — block if momentum bearish
+    side="CALL" (LEAP/CC): MACD logged but not blocking
     """
     flags: list[str] = []
 
-    for passed, flag in (
+    checks = [
         f_iv_rank(iv_rank),
         f_open_interest(open_interest),
         f_spread(bid, ask, iv_rank=iv_rank),
         f_earnings_vs_expiry(earnings_date, expiry, strike, price, closes),
         f_macro_window(hours=24),
-    ):
+    ]
+    # MACD is a CSP-specific hard filter (selling puts requires non-bearish momentum).
+    # For LEAP/CC bullish setups, momentum signal is captured in scoring.
+    if side == "PUT":
+        checks.append(f_macd(macd_state))
+
+    for passed, flag in checks:
         if not passed:
             flags.append(flag)
 

@@ -69,6 +69,49 @@ def calc_bb(closes: list[float], period: int = 20, mult: float = 2.0):
     return sma + mult * std, sma, sma - mult * std   # upper, mid, lower
 
 
+def calc_macd(closes: list[float], fast: int = 12, slow: int = 26,
+              signal: int = 9) -> Optional[dict]:
+    """
+    Standard MACD: ema(fast) - ema(slow), signal = ema(macd, 9).
+    Returns dict with last MACD line, signal line, histogram, and a
+    boolean `ok` flag matching Pine v2.1 logic:
+      ok = (histogram_rising) OR (macd_line > signal_line)
+    Either condition True = momentum favorable for bullish/CSP setup.
+    """
+    if len(closes) < slow + signal + 1:
+        return None
+    ema_fast = calc_ema(closes, fast)
+    ema_slow = calc_ema(closes, slow)
+    if not ema_fast or not ema_slow:
+        return None
+    # Align lengths (ema_fast longer because shorter period started earlier)
+    diff = len(ema_fast) - len(ema_slow)
+    macd_line = [ema_fast[i + diff] - ema_slow[i] for i in range(len(ema_slow))]
+    if len(macd_line) < signal + 1:
+        return None
+    signal_line = calc_ema(macd_line, signal)
+    if not signal_line or len(signal_line) < 2:
+        return None
+    diff2 = len(macd_line) - len(signal_line)
+    hist = [macd_line[i + diff2] - signal_line[i] for i in range(len(signal_line))]
+    if len(hist) < 2:
+        return None
+    macd_now    = macd_line[-1]
+    signal_now  = signal_line[-1]
+    hist_now    = hist[-1]
+    hist_prev   = hist[-2]
+    rising      = hist_now > hist_prev
+    bullish     = macd_now > signal_now
+    return {
+        "macd":   round(macd_now, 4),
+        "signal": round(signal_now, 4),
+        "hist":   round(hist_now, 4),
+        "rising": rising,
+        "bullish": bullish,
+        "ok":     rising or bullish,   # Pine v2.1: macdRising OR macdBull
+    }
+
+
 # ── Backtest win rate (reused from v1, slightly tuned) ───────────────────────
 
 def _sma_at(closes: list[float], idx: int, period: int = 50) -> Optional[float]:

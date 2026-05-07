@@ -75,7 +75,10 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
     if opt["mid"] > 0 and opt["ask"] > 0:
         spread_pct = (opt["ask"] - opt["bid"]) / opt["mid"] * 100.0
 
-    # Hard filters (reuse PUT gates; earnings-sigma rule is side-agnostic here)
+    # CC selling calls — MACD bearish actually HELPS (calls less likely to go ITM)
+    # so we don't apply MACD as hard filter here (side="CALL")
+    macd_state = scoring.calc_macd(closes)
+
     passed, flags = filters.passes_hard_filters(
         iv_rank=ivr,
         open_interest=opt["open_interest"],
@@ -86,6 +89,8 @@ def _evaluate_cc(schwab_headers: dict, entry: dict,
         expiry=opt["expiry"],
         earnings_date=fund.get("earnings_date"),
         closes=closes,
+        macd_state=macd_state,
+        side="CALL",
     )
     # CC-specific: OI threshold is 10, not 50 — you own the shares and only
     # need enough liquidity to close 1 contract. Remove OI_LOW flag if OI >= 10.

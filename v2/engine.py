@@ -171,6 +171,9 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
     if opt["mid"] > 0 and opt["ask"] > 0:
         spread_pct = (opt["ask"] - opt["bid"]) / opt["mid"] * 100.0
 
+    # MACD state (12,26,9 default) — used by hard filter for CSPs
+    macd_state = scoring.calc_macd(closes)
+
     # Hard filters
     passed, flags = filters.passes_hard_filters(
         iv_rank=ivr,
@@ -182,6 +185,8 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
         expiry=opt["expiry"],
         earnings_date=fund.get("earnings_date"),
         closes=closes,
+        macd_state=macd_state,
+        side=side,
     )
 
     # Conviction score (side-aware RSI scoring)
