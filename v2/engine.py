@@ -26,13 +26,17 @@ import pytz
 from . import (
     db, iv_rank, macro_calendar, scoring, filters, kelly,
     fundamentals, schwab_client, discord_output, universe,
-    manage_module, entry_cc,
+    manage_module, entry_cc, scan_spreads,
 )
 
 
 def run_entry_cc(schwab_headers: dict, webhook_url: str,
                  target_expiry: Optional[str] = None) -> int:
     return entry_cc.run_entry_cc(schwab_headers, webhook_url, target_expiry)
+
+
+def run_entry_spreads(schwab_headers: dict, webhook_url: str) -> int:
+    return scan_spreads.run_entry_spreads(schwab_headers, webhook_url)
 
 
 ET = pytz.timezone("America/New_York")

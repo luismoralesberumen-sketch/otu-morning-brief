@@ -299,6 +299,134 @@ def get_positions(headers: dict, account_hash: str) -> list[dict]:
         return []
 
 
+def get_spread_legs(headers: dict, ticker: str,
+                    target_expiry: str,
+                    side: str,
+                    short_delta: float = 0.28,
+                    width: Optional[float] = None) -> Optional[dict]:
+    """
+    Fetches both legs of a vertical spread from a single chain call.
+    side="PUT"  → Bull Put Spread  (sell higher strike, buy lower)
+    side="CALL" → Bear Call Spread (sell lower strike, buy higher)
+
+    width: strike distance. If None, auto-selected by underlying price:
+      underlying < 50  → $2.50  |  < 200 → $5  |  < 500 → $10  |  else $20
+
+    Returns dict with credit, width, credit_pct, strikes, deltas, OI, DTE.
+    Returns None if chain unavailable or spread can't be constructed.
+    """
+    contract_type = "PUT" if side == "PUT" else "CALL"
+    exp_map_key   = "putExpDateMap" if side == "PUT" else "callExpDateMap"
+    try:
+        r = requests.get(
+            _CHAINS,
+            params={
+                "symbol": ticker,
+                "contractType": contract_type,
+                "strikeCount": 40,
+                "includeUnderlyingQuote": "true",
+                "strategy": "SINGLE",
+                "range": "OTM",
+            },
+            headers=headers,
+            timeout=15,
+        )
+        chain = r.json()
+        if chain.get("status") == "FAILED" or exp_map_key not in chain:
+            return None
+        underlying = float(chain.get("underlyingPrice", 0) or 0)
+        if not underlying:
+            return None
+
+        if width is None:
+            if underlying < 50:    width = 2.5
+            elif underlying < 200: width = 5.0
+            elif underlying < 500: width = 10.0
+            else:                  width = 20.0
+
+        today = _dt.date.today()
+        try:
+            target_date = _dt.date.fromisoformat(target_expiry)
+        except Exception:
+            target_date = today + _dt.timedelta(days=7)
+        target_dte = max(1, (target_date - today).days)
+
+        best_exp, best_diff = None, 999
+        for exp_key in chain[exp_map_key]:
+            exp_date = _dt.date.fromisoformat(exp_key.split(":")[0])
+            dte = (exp_date - today).days
+            if dte < 1:
+                continue
+            diff = abs(dte - target_dte)
+            if diff < best_diff:
+                best_diff = diff
+                best_exp = exp_key
+        if best_exp is None:
+            return None
+
+        exp_date = _dt.date.fromisoformat(best_exp.split(":")[0])
+        dte = (exp_date - today).days
+
+        strikes_data: dict[float, dict] = {}
+        for strike_str, contracts in chain[exp_map_key][best_exp].items():
+            c = contracts[0]
+            if abs(c.get("delta", 0) or 0) > 0:
+                strikes_data[float(strike_str)] = c
+
+        if len(strikes_data) < 2:
+            return None
+
+        # Short leg: closest to short_delta
+        short_strike, short_contract, best_dd = None, None, 999.0
+        for s, c in strikes_data.items():
+            diff = abs(abs(c.get("delta", 0) or 0) - short_delta)
+            if diff < best_dd:
+                best_dd = diff
+                short_strike, short_contract = s, c
+        if short_strike is None:
+            return None
+
+        # Long leg: further OTM by ~width
+        long_target = short_strike - width if side == "PUT" else short_strike + width
+        available   = sorted(strikes_data.keys())
+        long_strike = min(available, key=lambda s: abs(s - long_target))
+        if long_strike == short_strike:
+            return None
+        long_contract = strikes_data[long_strike]
+
+        short_bid = float(short_contract.get("bid", 0) or 0)
+        short_ask = float(short_contract.get("ask", 0) or 0)
+        long_bid  = float(long_contract.get("bid",  0) or 0)
+        long_ask  = float(long_contract.get("ask",  0) or 0)
+        short_mid = (short_bid + short_ask) / 2
+        long_mid  = (long_bid  + long_ask)  / 2
+        credit       = round(short_mid - long_mid, 2)
+        actual_width = round(abs(short_strike - long_strike), 2)
+        credit_pct   = round(credit / actual_width * 100, 1) if actual_width > 0 else 0.0
+
+        return {
+            "spread_type":  "BPS" if side == "PUT" else "BCS",
+            "short_strike": short_strike,
+            "long_strike":  long_strike,
+            "short_bid":    short_bid,
+            "short_ask":    short_ask,
+            "long_bid":     long_bid,
+            "long_ask":     long_ask,
+            "credit":       credit,
+            "width":        actual_width,
+            "credit_pct":   credit_pct,
+            "short_delta":  round(abs(short_contract.get("delta", 0) or 0), 2),
+            "dte":          dte,
+            "expiry":       best_exp.split(":")[0],
+            "underlying":   round(underlying, 2),
+            "short_oi":     int(short_contract.get("openInterest", 0) or 0),
+            "long_oi":      int(long_contract.get("openInterest", 0) or 0),
+        }
+    except Exception as e:
+        print(f"  [SCHWAB] spread_legs error {ticker}: {e}")
+        return None
+
+
 def get_option_quote(headers: dict, option_symbol: str) -> Optional[dict]:
     """Quote for a single option contract by OSI symbol. Returns mark (per share)."""
     try:

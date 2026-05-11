@@ -144,6 +144,8 @@ class _Health(BaseHTTPRequestHandler):
                     threading.Thread(target=job_manage, daemon=True).start()
                 elif job == "entry-cc":
                     threading.Thread(target=job_entry_cc, daemon=True).start()
+                elif job == "entry-spreads":
+                    threading.Thread(target=job_entry_spreads, daemon=True).start()
                 else:
                     self.send_response(400); self.end_headers()
                     self.wfile.write(b"unknown job"); return
@@ -186,6 +188,9 @@ def job_manage():
 
 def job_entry_cc():
     engine.run_entry_cc(get_schwab_headers(), DISCORD_WEBHOOK_URL)
+
+def job_entry_spreads():
+    engine.run_entry_spreads(get_schwab_headers(), DISCORD_WEBHOOK_URL)
 
 def job_refresh_macro():
     macro_calendar.refresh_macro_calendar()
@@ -232,6 +237,10 @@ def main():
     # ENTRY-CC (Covered Call watchlist): 10:00 + 14:00 Mon-Fri
     sch.add_job(job_entry_cc, "cron", day_of_week="mon-fri", hour=10, minute=0)
     sch.add_job(job_entry_cc, "cron", day_of_week="mon-fri", hour=14, minute=0)
+
+    # ENTRY-SPREADS (Weekly verticals): 09:50 Mon-Wed only
+    # scan_spreads.py skips Thu-Fri internally too — double guard
+    sch.add_job(job_entry_spreads, "cron", day_of_week="mon-wed", hour=9, minute=50)
 
     # Macro calendar refresh: Sunday 22:00 ET
     sch.add_job(job_refresh_macro, "cron", day_of_week="sun", hour=22, minute=0)

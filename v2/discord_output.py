@@ -304,6 +304,63 @@ def cc_watchlist_message(results: list[dict], vix: Optional[float],
     return "\n".join(lines)
 
 
+# ── Weekly Spreads (ENTRY-SPREADS) ──────────────────────────────────────────
+
+def spread_scan_message(qualified: list[dict], near_miss: list[dict],
+                        scanned: int, target_expiry: str, dte: int) -> str:
+    now_et = _dt.datetime.now(ET)
+    lines = [
+        f"## 📐 WEEKLY SPREADS — {now_et.strftime('%a %b %d, %Y')} | {now_et.strftime('%I:%M %p ET')}",
+        f"**Target:** {target_expiry} (DTE {dte}) | **Scanned:** {scanned} tickers",
+        "",
+    ]
+
+    if qualified:
+        lines.append(f"**Found {len(qualified)} setup{'s' if len(qualified) != 1 else ''}:**")
+        lines.append("```")
+        hdr = (f"{'Tkr':<5} {'Bias':<5} {'Type':<9} {'Srt':>6} {'Lng':>6} "
+               f"{'Cr$':>5} {'Wid':>5} {'Cr%':>5} {'IVR':>4} {'Scr':>4} {'DTE':>3}")
+        lines.append(hdr)
+        lines.append("-" * min(len(hdr), 78))
+        for r in qualified[:12]:
+            lines.append(
+                f"{r['ticker']:<5} {r['bias']:<5} {r['spread_type']:<9} "
+                f"{r['short_strike']:>5.0f} {r['long_strike']:>5.0f} "
+                f"${r['credit']:>4.2f} ${r['width']:>3.0f} {r['credit_pct']:>4.1f}% "
+                f"{r.get('iv_rank', 0):>3.0f} {r['score']:>3.0f} {r['dte']:>3}"
+            )
+        lines.append("```")
+        lines.append("")
+        lines.append("**Top picks:**")
+        for i, r in enumerate(qualified[:5], 1):
+            arrow = "↑" if r["bias"] == "BULL" else "↓"
+            lines.append(
+                f"{i}. **{r['ticker']}** {arrow} {r['spread_type']} "
+                f"{r['short_strike']:.0f}/{r['long_strike']:.0f} "
+                f"@ ${r['credit']:.2f} credit | {r['credit_pct']:.1f}% of width "
+                f"| IVR {r.get('iv_rank', 0):.0f} | Score {r['score']}"
+            )
+    else:
+        lines.append("*No qualifying setups — all candidates failed gates.*")
+
+    if near_miss:
+        lines.append("")
+        lines.append(f"**Near-misses ({len(near_miss)})**")
+        lines.append("```")
+        hdr2 = f"{'Tkr':<5} {'Bias':<5} {'Scr':>4} {'IVR':>4} Reason"
+        lines.append(hdr2)
+        lines.append("-" * min(len(hdr2) + 30, 65))
+        for r in near_miss[:8]:
+            reason = (r.get("reject_reason") or "-")[:38]
+            lines.append(
+                f"{r['ticker']:<5} {r.get('bias', '-'):<5} {r.get('score', 0):>3.0f} "
+                f"{r.get('iv_rank', 0):>3.0f} {reason}"
+            )
+        lines.append("```")
+
+    return "\n".join(lines)
+
+
 # ── Summary footer (always sent at end of scan) ──────────────────────────────
 
 def scan_summary_message(tipo: str, scanned: int, sent: int,
