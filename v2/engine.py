@@ -179,6 +179,7 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
     macd_state = scoring.calc_macd(closes)
 
     # Hard filters
+    rsi = scoring.calc_rsi(closes)
     passed, flags = filters.passes_hard_filters(
         iv_rank=ivr,
         open_interest=opt["open_interest"],
@@ -190,6 +191,7 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
         earnings_date=fund.get("earnings_date"),
         closes=closes,
         macd_state=macd_state,
+        rsi=rsi,
         side=side,
     )
 

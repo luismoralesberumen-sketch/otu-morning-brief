@@ -116,6 +116,19 @@ def f_macro_window(hours: int = 24) -> tuple[bool, str]:
     return True, ""
 
 
+def f_rsi_call(rsi: Optional[float], max_rsi: float = 68.0) -> tuple[bool, str]:
+    """
+    Block CALL-side entries (LEAP/CC) when RSI is too extended.
+    RSI > 68 = momentum chase risk — wait for consolidation.
+    Scoring already zeroes RSI pts above 65; this gate adds a hard block at 68.
+    """
+    if rsi is None:
+        return True, ""
+    if rsi > max_rsi:
+        return False, f"RSI_EXTENDED({rsi:.1f}>{max_rsi:.0f})"
+    return True, ""
+
+
 def f_macd(macd_state: Optional[dict]) -> tuple[bool, str]:
     """
     MACD momentum filter — applied to CSPs (selling puts).
@@ -145,6 +158,7 @@ def passes_hard_filters(
     earnings_date: Optional[str],
     closes:        list[float],
     macd_state:    Optional[dict] = None,
+    rsi:           Optional[float] = None,
     side:          str = "PUT",
 ) -> tuple[bool, list[str]]:
     """
@@ -164,10 +178,13 @@ def passes_hard_filters(
         f_earnings_vs_expiry(earnings_date, expiry, strike, price, closes),
         f_macro_window(hours=24),
     ]
-    # MACD is a CSP-specific hard filter (selling puts requires non-bearish momentum).
-    # For LEAP/CC bullish setups, momentum signal is captured in scoring.
+    # MACD hard gate: CSP only (bearish momentum blocks put-selling)
     if side == "PUT":
         checks.append(f_macd(macd_state))
+
+    # RSI extended gate: CALL only (blocks momentum-chasing above 68)
+    if side == "CALL":
+        checks.append(f_rsi_call(rsi))
 
     for passed, flag in checks:
         if not passed:

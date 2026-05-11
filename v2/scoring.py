@@ -256,15 +256,14 @@ def score_rsi_zone(rsi: Optional[float], side: str = "PUT") -> int:
     without exhaustion.
       50-65 : full credit (healthy uptrend)
       45-50 : partial (just turning up)
-      65-70 : partial (slight overbought, still ok)
-      <45 or >70 : 0 (broken or exhausted)
+      >65   : 0 — extended, don't chase (hard gate blocks >68 in filters)
+      <45   : 0 — momentum broken
     """
     if rsi is None:
         return 0
     if side == "CALL":
         if 50 <= rsi <= 65: return 15
         if 45 <= rsi < 50:  return 8
-        if 65 <  rsi <= 70: return 8
         return 0
     # default PUT
     if 30 <= rsi <= 50: return 15
