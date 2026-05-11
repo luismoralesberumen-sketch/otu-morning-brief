@@ -64,13 +64,15 @@ def _historical_close(schwab_headers: dict, ticker: str,
 
 def _classify(side: str, strike: float, price: float,
               past_expiry: bool) -> str:
-    if side == "PUT":
+    # BULL (BPS short put) and BEAR (BCS short call) map to PUT/CALL logic respectively.
+    # For spreads, "strike" is the short leg — the same boundary that determines win/loss.
+    if side in ("PUT", "BULL"):
         if past_expiry:
             return "EXPIRED_OTM" if price >= strike else "EXPIRED_ITM"
         if price >= strike * 1.03: return "OTM_SAFE"
         if price >= strike:        return "ITM_TOUCH"
         return "BREACHED"
-    # CALL
+    # CALL / BEAR
     if past_expiry:
         return "EXPIRED_OTM" if price <= strike else "EXPIRED_ITM"
     if price <= strike * 0.97: return "OTM_SAFE"
@@ -80,39 +82,46 @@ def _classify(side: str, strike: float, price: float,
 
 def _pnl_estimate(side: str, strike: float, price: float, mid: Optional[float],
                    price_at_alert: Optional[float], days_since: int,
-                   dte_total: int, past_expiry: bool) -> Optional[float]:
+                   dte_total: int, past_expiry: bool,
+                   spread_width: Optional[float] = None) -> Optional[float]:
     """
     Rough P/L on premium basis.
-      • If past_expiry: OTM → +100%, ITM → intrinsic loss vs premium
-      • If not expired: linear theta decay proxy × directional adjust
-    Returns % of premium (e.g. +50.0 = booked 50% of max profit).
+      Naked (CSP/LEAP): OTM → +100%, ITM → intrinsic loss vs premium
+      Spread (BULL/BEAR): loss capped at (width - credit); uses spread_width if available
+    Returns % of max profit (e.g. +100 = full win, -100 = full loss on spread).
     """
     if mid is None or mid <= 0:
         return None
+
+    is_spread = side in ("BULL", "BEAR")
+    is_put_like = side in ("PUT", "BULL")
+
     if past_expiry:
-        if side == "PUT":
+        if is_put_like:
             if price >= strike:
                 return 100.0
             intrinsic = strike - price
-            return round((mid - intrinsic) / mid * 100.0, 1)
         else:
             if price <= strike:
                 return 100.0
             intrinsic = price - strike
-            return round((mid - intrinsic) / mid * 100.0, 1)
-    # Rough theta decay (fraction of time elapsed)
+
+        if is_spread and spread_width and spread_width > 0:
+            max_loss = spread_width - mid
+            if max_loss <= 0:
+                return 100.0
+            return round(max((-intrinsic / max_loss) * 100.0, -100.0), 1)
+        return round((mid - intrinsic) / mid * 100.0, 1)
+
+    # Pre-expiry: linear theta decay proxy
     if dte_total <= 0:
         return None
     time_decay = min(1.0, max(0.0, days_since / dte_total))
-    # Directional penalty: if breached, more aggressive loss
-    if side == "PUT":
-        dist_pct = (price - strike) / strike * 100.0 if strike else 0
-    else:
-        dist_pct = (strike - price) / strike * 100.0 if strike else 0
-    # base: we've earned time_decay * 100% of theta, minus adverse move
+    dist_pct = ((price - strike) / strike * 100.0 if is_put_like
+                else (strike - price) / strike * 100.0) if strike else 0
     base_pnl = time_decay * 100.0
-    if dist_pct < 0:  # breached
-        base_pnl -= abs(dist_pct) * 3  # rough gamma amplification
+    if dist_pct < 0:
+        base_pnl -= abs(dist_pct) * 3
     return round(base_pnl, 1)
 
 
@@ -142,7 +151,8 @@ def evaluate_pending(schwab_headers: dict, verbose: bool = True) -> int:
         except Exception:
             continue
 
-        existing = {o["days_since"] for o in db.outcomes_for_alert(alert_id)}
+        spread_width = a["spread_width"] if "spread_width" in a.keys() else None
+        existing  = {o["days_since"] for o in db.outcomes_for_alert(alert_id)}
         dte_total = max(1, (exp_dt - alert_dt).days)
 
         # Build checkpoint list: T+7/14/21/30 + at-expiry
@@ -169,7 +179,8 @@ def evaluate_pending(schwab_headers: dict, verbose: bool = True) -> int:
             klass = _classify(side, strike, price_eval, past_expiry)
             pnl = _pnl_estimate(side, strike, price_eval, mid, price0,
                                 days_since if days_since != AT_EXPIRY_CHECKPOINT else dte_total,
-                                dte_total, past_expiry)
+                                dte_total, past_expiry,
+                                spread_width=spread_width)
 
             db.upsert_outcome(
                 alert_id=alert_id, days_since=days_since,

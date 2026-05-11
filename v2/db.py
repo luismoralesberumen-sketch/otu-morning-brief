@@ -66,14 +66,17 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # alerts_log: add per-contract snapshot columns for outcome evaluation
     existing = {r["name"] for r in cur.execute("PRAGMA table_info(alerts_log)").fetchall()}
     add = []
-    if "side"            not in existing: add.append("side TEXT")              # PUT / CALL
+    if "side"            not in existing: add.append("side TEXT")              # PUT / CALL / BULL / BEAR
     if "strike"          not in existing: add.append("strike REAL")
     if "expiry"          not in existing: add.append("expiry TEXT")            # YYYY-MM-DD
-    if "mid_at_alert"    not in existing: add.append("mid_at_alert REAL")      # premium received proxy
+    if "mid_at_alert"    not in existing: add.append("mid_at_alert REAL")      # premium / credit received
     if "delta_at_alert"  not in existing: add.append("delta_at_alert REAL")
     if "iv_rank_at_alert" not in existing: add.append("iv_rank_at_alert REAL")
     if "roi_at_alert"    not in existing: add.append("roi_at_alert REAL")
-    if "price_at_alert"  not in existing: add.append("price_at_alert REAL")    # underlying at alert
+    if "price_at_alert"  not in existing: add.append("price_at_alert REAL")   # underlying at alert
+    if "long_strike"     not in existing: add.append("long_strike REAL")       # spread: long leg
+    if "spread_width"    not in existing: add.append("spread_width REAL")      # spread: width
+    if "spread_type"     not in existing: add.append("spread_type TEXT")       # BPS | BCS | BCS_DEBIT | BPS_DEBIT
     for col in add:
         cur.execute(f"ALTER TABLE alerts_log ADD COLUMN {col}")
 
@@ -192,12 +195,16 @@ def log_alert(ticker: str, tipo: str, tier: Optional[int] = None,
               delta_at_alert: Optional[float] = None,
               iv_rank_at_alert: Optional[float] = None,
               roi_at_alert: Optional[float] = None,
-              price_at_alert: Optional[float] = None) -> int:
+              price_at_alert: Optional[float] = None,
+              # Spread-specific (ENTRY-SPREAD)
+              long_strike: Optional[float] = None,
+              spread_width: Optional[float] = None,
+              spread_type: Optional[str] = None) -> int:
     """Insert an alert record. Returns the row id.
 
-    The extended fields (strike/expiry/mid/delta/ivr/roi/price) are used by the
-    outcome evaluator to measure real performance at T+7/14/21/30. All are
-    optional — legacy callers continue to work.
+    Extended fields (strike/expiry/mid/delta/ivr/roi/price) are used by the
+    outcome evaluator at T+7/14/21/30. Spread fields (long_strike, spread_width,
+    spread_type) used for accurate P/L on vertical spreads. All optional.
     """
     conn = get_conn()
     ts = _dt.datetime.utcnow().isoformat(timespec="seconds")
@@ -205,11 +212,11 @@ def log_alert(ticker: str, tipo: str, tier: Optional[int] = None,
         cur = conn.execute(
             "INSERT INTO alerts_log (ticker, tier, score, timestamp, tipo, subtype, filled_bool, "
             "  side, strike, expiry, mid_at_alert, delta_at_alert, iv_rank_at_alert, "
-            "  roi_at_alert, price_at_alert) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  roi_at_alert, price_at_alert, long_strike, spread_width, spread_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ticker, tier, score, ts, tipo, subtype, 1 if filled_bool else 0,
              side, strike, expiry, mid_at_alert, delta_at_alert, iv_rank_at_alert,
-             roi_at_alert, price_at_alert)
+             roi_at_alert, price_at_alert, long_strike, spread_width, spread_type)
         )
         conn.commit()
         return cur.lastrowid

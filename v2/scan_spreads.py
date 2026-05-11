@@ -284,6 +284,9 @@ def run_entry_spreads(schwab_headers: dict, webhook_url: str) -> int:
             iv_rank_at_alert=r.get("iv_rank"),
             roi_at_alert=r.get("credit_pct"),
             price_at_alert=r.get("price"),
+            long_strike=r.get("long_strike"),
+            spread_width=r.get("width"),
+            spread_type=r.get("spread_type"),
         )
 
     print(f"[ENTRY-SPREADS] Done — {len(qualified)} qualifying / {scanned} scanned")
