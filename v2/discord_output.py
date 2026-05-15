@@ -176,40 +176,62 @@ def _one_line_reason(r: dict) -> str:
 
 def leap_alert_message(ticker: str, score: int, tier: int, tier_desc: str,
                         d: dict, iv_rank: Optional[float], kelly: Optional[float],
-                        prev_tier: Optional[int] = None) -> str:
-    now_et = _dt.datetime.now(ET)
+                        prev_tier: Optional[int] = None,
+                        action_status: str = "QUEUE",
+                        action_reasons: Optional[list] = None,
+                        structure_rec: str = "",
+                        entry_window: str = "") -> str:
+    now_et  = _dt.datetime.now(ET)
     upgrade = f" | T{prev_tier} → T{tier} UPGRADE" if prev_tier and tier < prev_tier else ""
     emoji   = {1: "🚀", 2: "📊"}.get(tier, "🔔")
 
+    # Action banner
+    action_emoji = {"ENTER_NOW": "🟢", "QUEUE": "🟡", "WATCH": "🔴"}.get(action_status, "🟡")
+    reasons_str  = " · ".join(action_reasons) if action_reasons else ""
+    if action_status == "ENTER_NOW":
+        action_line = f"{action_emoji} **ENTER NOW** — condiciones óptimas"
+    elif action_status == "QUEUE":
+        action_line = f"{action_emoji} **QUEUE** — {reasons_str}"
+    else:
+        action_line = f"{action_emoji} **WATCH ONLY** — {reasons_str}"
+
+    window_line = f"   Entrada: {entry_window}" if action_status != "ENTER_NOW" and entry_window else ""
+
     price   = d.get("price", 0)
     rsi     = d.get("rsi", "—")
+    rsi_ok  = "✅" if rsi != "—" and 50 <= float(rsi) <= 65 else "⚠️"
     low_bb  = d.get("lower_bb")
     bb_str  = f"${low_bb:.2f}" if low_bb else "—"
     ema200  = d.get("ema200")
     ema_str = f"${ema200:.2f}" if ema200 else "—"
+    ema_ok  = "✅" if ema200 and price > ema200 else "⚠️"
     wr      = d.get("backtest_wr", "—")
 
-    ivr_line   = f"IV Rank:     {iv_rank:.0f}"   if iv_rank is not None else "IV Rank:     —"
-    kelly_line = f"Kelly Score: {kelly:.1f}"     if kelly   is not None else "Kelly Score: —"
+    ivr_val    = f"{iv_rank:.0f}" if iv_rank is not None else "—"
+    ivr_ok     = "✅" if iv_rank and 25 <= iv_rank <= 55 else ("⚠️" if iv_rank and iv_rank > 65 else "🔵")
+    kelly_line = f"Kelly Score: {kelly:.1f}" if kelly is not None else "Kelly Score: —"
+    structure  = structure_rec or tier_desc
 
     msg = (
         f"## {emoji} LEAP ALERT — **{ticker}**{upgrade}\n"
+        f"{action_line}\n"
+        f"{window_line}\n"
         f"```\n"
         f"Price:       ${price:.2f}\n"
-        f"Score:       {score}/100   Tier {tier}: {tier_desc}\n"
+        f"Score:       {score}/100   Tier {tier}\n"
         f"{'-'*46}\n"
-        f"RSI(14):     {rsi}\n"
+        f"RSI(14):     {rsi}   {rsi_ok} zona 50-65\n"
+        f"EMA200:      {ema_str}   {ema_ok}\n"
         f"Lower BB:    {bb_str}\n"
-        f"EMA200:      {ema_str}\n"
-        f"{ivr_line}\n"
+        f"IV Rank:     {ivr_val}   {ivr_ok}\n"
         f"{kelly_line}\n"
         f"Backtest WR: {wr}%\n"
         f"{'-'*46}\n"
-        f"Strategy:    {tier_desc}\n"
+        f"Estructura:  {structure}\n"
         f"```\n"
-        f"*{now_et.strftime('%I:%M %p ET')} — OTU Wheel v2.0*"
+        f"*{now_et.strftime('%I:%M %p ET')} — OTU Wheel v2.1*"
     )
-    return msg
+    return msg.replace("\n\n\n", "\n\n")  # limpia líneas vacías dobles
 
 
 # ── MANAGE ───────────────────────────────────────────────────────────────────

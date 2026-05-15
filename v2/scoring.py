@@ -202,15 +202,22 @@ def backtest_win_rate(candles: list[dict], fwd: int = 30,
 
 # ── Component scoring (pure functions, 0-N points) ───────────────────────────
 
-def score_iv_rank(iv_rank: Optional[float]) -> int:
+def score_iv_rank(iv_rank: Optional[float], side: str = "PUT") -> int:
     """
-    Calibrated for low-VIX market reality: in regimes where VIX<20,
-    individual ticker IVRs cluster in the 15-35 range. Hard binary at
-    IVR=30 was killing baseline scores. Now IVR≥20 gets 5pts (some
-    edge), IVR≥30 gets 10 (decent), IVR≥50 gets 18 (good), IVR≥70 gets 25 (premium).
+    PUT (CSP/CC — vendiendo premium): IVR alto = más edge → más puntos.
+    CALL (LEAP/spread — comprando calls): IVR alto = premium caro → penalizado.
+      Zona ideal para comprar: IVR 25-55 (volatilidad presente pero no inflada).
+      IVR > 65 en CALL → 5 pts (solo via spread, nunca naked LEAP).
     """
     if iv_rank is None:
         return 0
+    if side == "CALL":
+        if 25 <= iv_rank <= 55: return 20   # zona ideal — vol presente, precio razonable
+        if 15 <= iv_rank <  25: return 12   # IV bajo, opciones baratas
+        if 55 < iv_rank <= 65:  return 10   # elevado, preferir spread
+        if iv_rank > 65:        return 5    # caro — spread obligatorio
+        return 0
+    # PUT side (original)
     if iv_rank >= 70: return 25
     if iv_rank >= 50: return 18
     if iv_rank >= 30: return 10
@@ -340,7 +347,7 @@ def calc_conviction(inp: ConvictionInputs) -> tuple[int, dict]:
 
     # Score components
     score = 0
-    score += score_iv_rank(inp.iv_rank)
+    score += score_iv_rank(inp.iv_rank, side=inp.side)
     score += score_support(inp.price, lower, ema50, ema200)
     score += score_rsi_zone(rsi, side=inp.side)
     score += score_fundamentals(inp.pe_positive, inp.beats_4q)

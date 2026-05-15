@@ -26,7 +26,7 @@ import pytz
 from . import (
     db, iv_rank, macro_calendar, scoring, filters, kelly,
     fundamentals, schwab_client, discord_output, universe,
-    manage_module, entry_cc, scan_spreads,
+    manage_module, entry_cc, scan_spreads, actionability,
 )
 
 
@@ -212,33 +212,45 @@ def _evaluate_candidate(schwab_headers: dict, ticker: str,
 
     dte = (_dt.date.fromisoformat(opt["expiry"]) - _dt.date.today()).days
 
+    # Actionability status
+    now_et = _dt.datetime.now(ET)
+    action_status, action_reasons, structure_rec = actionability.get_action_status(
+        side=side, iv_rank=ivr, spread_pct=spread_pct,
+        score=score, tier=tier, now_et=now_et,
+    )
+    entry_window = actionability.next_entry_window(now_et)
+
     return {
-        "ticker":       ticker,
-        "price":        round(price, 2),
-        "strike":       opt["strike"],
-        "delta":        opt["delta"],
-        "mid":          opt["mid"],
-        "bid":          opt["bid"],
-        "ask":          opt["ask"],
-        "iv":           opt["iv"],
-        "iv_rank":      ivr,
-        "roi":          opt["roi"],
-        "kelly":        kelly_s,
-        "dte":          dte,
-        "expiry":       opt["expiry"],
-        "open_interest": opt["open_interest"],
-        "spread_pct":   spread_pct,
-        "score":        score,
-        "base_score":   base_score,
-        "tier":         tier,
-        "tier_desc":    tier_desc,
-        "details":      details,
-        "flags":        flags,
-        "passed":       passed,
-        "backtest_wr":  wr,
-        "pe_positive":  fund["pe_positive"],
-        "beats_4q":     fund["beats_4q"],
-        "earnings_date": fund.get("earnings_date"),
+        "ticker":         ticker,
+        "price":          round(price, 2),
+        "strike":         opt["strike"],
+        "delta":          opt["delta"],
+        "mid":            opt["mid"],
+        "bid":            opt["bid"],
+        "ask":            opt["ask"],
+        "iv":             opt["iv"],
+        "iv_rank":        ivr,
+        "roi":            opt["roi"],
+        "kelly":          kelly_s,
+        "dte":            dte,
+        "expiry":         opt["expiry"],
+        "open_interest":  opt["open_interest"],
+        "spread_pct":     spread_pct,
+        "score":          score,
+        "base_score":     base_score,
+        "tier":           tier,
+        "tier_desc":      tier_desc,
+        "details":        details,
+        "flags":          flags,
+        "passed":         passed,
+        "backtest_wr":    wr,
+        "pe_positive":    fund["pe_positive"],
+        "beats_4q":       fund["beats_4q"],
+        "earnings_date":  fund.get("earnings_date"),
+        "action_status":  action_status,
+        "action_reasons": action_reasons,
+        "structure_rec":  structure_rec,
+        "entry_window":   entry_window,
     }
 
 
@@ -389,6 +401,10 @@ def run_entry_leap(schwab_headers: dict, webhook_url: str) -> int:
             tier_desc=c["tier_desc"], d=c["details"],
             iv_rank=c["iv_rank"], kelly=c["kelly"],
             prev_tier=c.get("prev_tier"),
+            action_status=c.get("action_status", "QUEUE"),
+            action_reasons=c.get("action_reasons", []),
+            structure_rec=c.get("structure_rec", ""),
+            entry_window=c.get("entry_window", ""),
         )
         if discord_output.send(webhook_url, msg):
             d = c.get("details", {}) or {}
