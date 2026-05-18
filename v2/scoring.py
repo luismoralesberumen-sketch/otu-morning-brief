@@ -226,26 +226,49 @@ def score_iv_rank(iv_rank: Optional[float], side: str = "PUT") -> int:
 
 
 def score_support(price: float, lower_bb: Optional[float],
-                  ema50: Optional[float], ema200: Optional[float]) -> int:
+                  ema50: Optional[float], ema200: Optional[float],
+                  mid_bb: Optional[float] = None,
+                  upper_bb: Optional[float] = None,
+                  side: str = "PUT") -> int:
     """
-    Recalibrated: above EMA200 baseline reward up from 8→12. In a healthy
-    uptrend, most tickers will sit above EMA200 without touching lower BB
-    for weeks; treating that as "barely passing" was wrong.
+    PUT (CSP — selling puts on pullbacks):
+      Rewards price near/touching lower BB as textbook put-selling entry.
+      20 pts: at/below lower BB + above EMA200
+      14 pts: within 5% above lower BB + above EMA200
+      12 pts: above EMA200 baseline
+       0 pts: below EMA200
 
-    20 pts: touching lower BB + above EMA200 (textbook entry)
-    14 pts: within 5% above lower BB + above EMA200 (close to support)
-    12 pts: above EMA200 only (healthy uptrend baseline)
-     0 pts: below EMA200 (trend broken)
+    CALL (LEAP — buying calls in uptrend):
+      Lower BB = price falling = bad for call buyers.
+      Rewards price in healthy pullback zone (between lower and mid BB)
+      or in momentum continuation (between mid and upper BB).
+      20 pts: between lower BB and mid BB + above EMA200 (pullback in uptrend)
+      15 pts: between mid BB and upper BB + above EMA200 (momentum continuation)
+      10 pts: above EMA200 only, no BB data
+       8 pts: at/below lower BB + above EMA200 (oversold, risky for calls)
+       0 pts: below EMA200 (trend broken) or above upper BB (extended, don't chase)
     """
     if ema200 is None:
         return 0
-    above_200 = price >= ema200
-    if not above_200:
+    if price < ema200:
         return 0
+
+    if side == "CALL":
+        if lower_bb is None or mid_bb is None or upper_bb is None:
+            return 10  # no BB data — baseline above EMA200
+        if price > upper_bb:
+            return 0   # extended — don't chase calls
+        if price >= mid_bb:
+            return 15  # between mid and upper BB — healthy momentum
+        if price >= lower_bb:
+            return 20  # between lower and mid BB — pullback, ideal CALL entry
+        return 8       # at/below lower BB — oversold, risky
+
+    # PUT side (original logic)
     if lower_bb is not None and lower_bb > 0:
         bb_dist_pct = (price - lower_bb) / lower_bb * 100.0
-        if bb_dist_pct <= 0:       return 20
-        if bb_dist_pct <= 5:       return 14
+        if bb_dist_pct <= 0:  return 20
+        if bb_dist_pct <= 5:  return 14
     return 12
 
 
@@ -348,7 +371,8 @@ def calc_conviction(inp: ConvictionInputs) -> tuple[int, dict]:
     # Score components
     score = 0
     score += score_iv_rank(inp.iv_rank, side=inp.side)
-    score += score_support(inp.price, lower, ema50, ema200)
+    score += score_support(inp.price, lower, ema50, ema200,
+                           mid_bb=mid, upper_bb=upper, side=inp.side)
     score += score_rsi_zone(rsi, side=inp.side)
     score += score_fundamentals(inp.pe_positive, inp.beats_4q)
     score += score_option_liquidity(inp.open_interest, inp.spread_pct_of_mid)

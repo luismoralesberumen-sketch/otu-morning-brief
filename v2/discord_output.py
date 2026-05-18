@@ -203,11 +203,25 @@ def leap_alert_message(ticker: str, score: int, tier: int, tier_desc: str,
     rsi     = d.get("rsi", "—")
     rsi_ok  = "✅" if rsi != "—" and 50 <= float(rsi) <= 65 else "⚠️"
     low_bb  = d.get("lower_bb")
-    bb_str  = f"${low_bb:.2f}" if low_bb else "—"
+    mid_bb  = d.get("mid_bb")
+    up_bb   = d.get("upper_bb")
     ema200  = d.get("ema200")
     ema_str = f"${ema200:.2f}" if ema200 else "—"
     ema_ok  = "✅" if ema200 and price > ema200 else "⚠️"
     wr      = d.get("backtest_wr", "—")
+
+    # BB zone display for CALL side
+    if low_bb and mid_bb and up_bb:
+        if price > up_bb:
+            bb_zone = f"sobre upper ${up_bb:.2f}  ⚠️ extendido"
+        elif price >= mid_bb:
+            bb_zone = f"mid-upper  (mid ${mid_bb:.2f})  ✅ momentum"
+        elif price >= low_bb:
+            bb_zone = f"lower-mid  (low ${low_bb:.2f})  ✅ pullback"
+        else:
+            bb_zone = f"bajo lower ${low_bb:.2f}  ⚠️ oversold"
+    else:
+        bb_zone = f"lower ${low_bb:.2f}" if low_bb else "—"
 
     ivr_val    = f"{iv_rank:.0f}" if iv_rank is not None else "—"
     ivr_ok     = "✅" if iv_rank and 25 <= iv_rank <= 55 else ("⚠️" if iv_rank and iv_rank > 65 else "🔵")
@@ -224,7 +238,7 @@ def leap_alert_message(ticker: str, score: int, tier: int, tier_desc: str,
         f"{'-'*46}\n"
         f"RSI(14):     {rsi}   {rsi_ok} zona 50-65\n"
         f"EMA200:      {ema_str}   {ema_ok}\n"
-        f"Lower BB:    {bb_str}\n"
+        f"BB Zone:     {bb_zone}\n"
         f"IV Rank:     {ivr_val}   {ivr_ok}\n"
         f"{kelly_line}\n"
         f"Backtest WR: {wr}%\n"
