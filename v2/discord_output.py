@@ -195,7 +195,9 @@ def leap_alert_message(ticker: str, score: int, tier: int, tier_desc: str,
     else:
         action_line = f"{action_emoji} **WATCH ONLY** — {reasons_str}"
 
-    window_line = f"   Entrada: {entry_window}" if action_status != "ENTER_NOW" and entry_window else ""
+    # Only show entry window when the block is timing-related, not condition-related
+    _timing_blocked = action_status != "ENTER_NOW" and entry_window and entry_window != "Ahora — ventana abierta"
+    window_line = f"   Entrada: {entry_window}" if _timing_blocked else ""
 
     price   = d.get("price", 0)
     rsi     = d.get("rsi", "—")
