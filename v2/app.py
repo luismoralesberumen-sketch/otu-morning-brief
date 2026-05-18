@@ -61,9 +61,37 @@ def update_render_env(key: str, value: str) -> None:
         print(f"  Render env update failed: {e}")
 
 
+_TMP_TOKEN_FILE = "/tmp/schwab_refresh_token.txt"
+
+
+def _read_tmp_token() -> str:
+    """Read refresh token from /tmp (survives process restarts within same container)."""
+    try:
+        with open(_TMP_TOKEN_FILE) as f:
+            tok = f.read().strip()
+        if tok:
+            print(f"  [TOKEN] loaded from /tmp cache")
+            return tok
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"  [TOKEN] /tmp read error: {e}")
+    return ""
+
+
+def _write_tmp_token(token: str) -> None:
+    """Persist refresh token to /tmp so restarts within same container pick it up."""
+    try:
+        with open(_TMP_TOKEN_FILE, "w") as f:
+            f.write(token)
+    except Exception as e:
+        print(f"  [TOKEN] /tmp write error: {e}")
+
+
 def refresh_schwab_token() -> Optional[str]:
     global _token, _token_refreshed_at
-    refresh_token = os.environ.get("SCHWAB_REFRESH_TOKEN", "")
+    # Priority: /tmp (latest rotated) → env var (from last deploy/re-auth)
+    refresh_token = _read_tmp_token() or os.environ.get("SCHWAB_REFRESH_TOKEN", "")
     if not refresh_token:
         print("  No SCHWAB_REFRESH_TOKEN")
         return None
@@ -84,9 +112,10 @@ def refresh_schwab_token() -> Optional[str]:
         _token_refreshed_at = datetime.datetime.now(ET)
         new_refresh = data.get("refresh_token") or refresh_token
         if new_refresh != refresh_token:
-            update_render_env("SCHWAB_REFRESH_TOKEN", new_refresh)
+            _write_tmp_token(new_refresh)            # fast local persist
+            update_render_env("SCHWAB_REFRESH_TOKEN", new_refresh)  # durable backup
             os.environ["SCHWAB_REFRESH_TOKEN"] = new_refresh
-            print("  Refresh token rotated → Render updated")
+            print("  Refresh token rotated → /tmp + Render updated")
         print("  Schwab token refreshed OK")
         return _token
     except Exception as e:
